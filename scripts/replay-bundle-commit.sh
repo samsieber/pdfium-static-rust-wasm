@@ -39,6 +39,45 @@ has_diff() {
   ! git -C "$bundle_repo" diff --quiet --binary "$parent" "$commit" -- "$@"
 }
 
+strip_path_components() {
+  local path=$1
+  local count=$2
+
+  for ((i = 0; i < count; i++)); do
+    path=${path#*/}
+  done
+
+  printf '%s\n' "$path"
+}
+
+seed_missing_modified_paths() {
+  local bundle_repo=$1
+  local target_repo=$2
+  local parent=$3
+  local commit=$4
+  local strip=$5
+  shift 5
+
+  local status source_path target_path target_file target_dir
+  while IFS= read -r -d '' status; do
+    IFS= read -r -d '' source_path
+
+    case "$status" in
+      M|T)
+        target_path=$(strip_path_components "$source_path" "$strip")
+        target_file=$target_repo/$target_path
+
+        if [[ ! -e "$target_file" ]]; then
+          target_dir=$(dirname "$target_file")
+          mkdir -p "$target_dir"
+          git -C "$bundle_repo" show "$parent:$source_path" > "$target_file"
+          echo "  seeded missing base file $target_path"
+        fi
+        ;;
+    esac
+  done < <(git -C "$bundle_repo" diff --name-status -z --diff-filter=MT "$parent" "$commit" -- "$@")
+}
+
 apply_diff() {
   local bundle_repo=$1
   local target_repo=$2
@@ -53,6 +92,7 @@ apply_diff() {
     apply_args+=("--check" "--3way")
   else
     apply_args+=("--3way")
+    seed_missing_modified_paths "$bundle_repo" "$target_repo" "$parent" "$commit" "$strip" "$@"
   fi
 
   git -C "$bundle_repo" diff --binary "$parent" "$commit" -- "$@" |
