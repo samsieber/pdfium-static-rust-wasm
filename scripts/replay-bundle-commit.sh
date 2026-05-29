@@ -58,13 +58,14 @@ seed_missing_modified_paths() {
   local strip=$5
   shift 5
 
-  local status source_path target_path target_file target_dir
+  local status source_path target_path target_file target_dir source_strip
+  source_strip=$((strip - 1))
   while IFS= read -r -d '' status; do
     IFS= read -r -d '' source_path
 
     case "$status" in
       M|T)
-        target_path=$(strip_path_components "$source_path" "$strip")
+        target_path=$(strip_path_components "$source_path" "$source_strip")
         target_file=$target_repo/$target_path
 
         if [[ ! -e "$target_file" ]]; then
