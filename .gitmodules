@@ -1,0 +1,8 @@
+[submodule "pdfium-render"]
+	path = pdfium-render
+	url = git@github.com:samsieber/pdfium-render.git
+	branch = static-wasm32
+[submodule "pdfium-lib"]
+	path = pdfium-lib
+	url = git@github.com:samsieber/pdfium-lib.git
+	branch = static-wasm32
