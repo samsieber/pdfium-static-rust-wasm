@@ -1,0 +1,1 @@
+This repository is where I'm developing a fork of pdfium-lib and pdfium-render that together will let a rust based project emit a single wasm file for the both of them, targeting wasm32-unknown-unknown using wasm-pack, with perhaps a small js shim required
