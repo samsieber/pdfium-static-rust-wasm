@@ -4,7 +4,9 @@ Small `wasm-pack`-oriented wrapper crate for experimenting with a statically lin
 `pdfium-render` WebAssembly build.
 
 The crate currently depends on the local `../pdfium-render` subtree with its
-`static` feature enabled.
+`static` feature enabled. It pins `pdfium-render` to the `pdfium_7543` API
+feature because the current Pdfium checkout is `chromium/7623`; newer
+`pdfium_7763` bindings reference APIs not present in the archive.
 
 After building the Pdfium archive prototype, run a Rust-side link probe with:
 
@@ -29,7 +31,9 @@ Current caveat: the Rust link succeeds and `wasm-pack` produces `pkg/`, but the
 browser page currently reports a bare `env` module import. Inspect it with:
 
 ```sh
-wasm-objdump -x pkg/wasmpdf_bg.wasm
+node scripts/audit-wasm-imports.mjs
 ```
 
-Those imports are the next integration boundary for the static archive.
+Those imports are the next integration boundary for the static archive. The
+current list is runtime-shaped: C allocator/string/math/wide-char helpers and
+libc++ ABI/iostream helpers remain as `env` imports.
