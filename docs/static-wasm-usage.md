@@ -9,6 +9,7 @@ The current prototype target is:
 - Rust target: `wasm32-unknown-unknown`
 - JS packaging: `wasm-pack --target web`
 - Pdfium archive: `pdfium-lib/build/rust-wasm/pdfium/out/wasm32-wasm-release/obj/libpdfium.a`
+- Pdfium GN profile: `is_debug=false`, `is_official_build=true`, `symbol_level=0`
 - Runtime shim: WASI imports mapped to `@bjorn3/browser_wasi_shim`
 
 ## Cargo dependency
