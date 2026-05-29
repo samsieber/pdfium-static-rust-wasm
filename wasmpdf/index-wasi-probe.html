@@ -35,10 +35,41 @@
         display: grid;
         grid-template-columns: max-content 1fr;
         gap: 10px 16px;
-        margin: 0;
+        margin: 0 0 20px;
         padding: 20px 0;
         border-top: 1px solid #c8ced8;
         border-bottom: 1px solid #c8ced8;
+      }
+
+      form {
+        display: grid;
+        gap: 12px;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      input[type="file"] {
+        max-width: 100%;
+      }
+
+      button {
+        width: fit-content;
+        min-height: 36px;
+        padding: 0 14px;
+        border: 1px solid #9aa4b2;
+        border-radius: 6px;
+        background: #ffffff;
+        color: #1d232f;
+        font: inherit;
+        font-weight: 650;
+      }
+
+      button:disabled {
+        color: #6b7280;
       }
 
       dt {
@@ -76,27 +107,97 @@
         <dt>Pdfium init</dt>
         <dd id="probe">pending</dd>
       </dl>
+      <form id="pdf-form">
+        <input id="pdf-file" type="file" accept="application/pdf,.pdf" />
+        <div class="actions">
+          <button id="count-pages" type="submit" disabled>Count pages twice</button>
+          <button id="use-sample" type="button" disabled>Use sample PDF</button>
+        </div>
+      </form>
+      <dl>
+        <dt>First call</dt>
+        <dd id="first-count">waiting</dd>
+        <dt>Second call</dt>
+        <dd id="second-count">waiting</dd>
+      </dl>
     </main>
     <script type="module">
       const version = document.querySelector("#version");
       const probe = document.querySelector("#probe");
+      const form = document.querySelector("#pdf-form");
+      const fileInput = document.querySelector("#pdf-file");
+      const countButton = document.querySelector("#count-pages");
+      const sampleButton = document.querySelector("#use-sample");
+      const firstCount = document.querySelector("#first-count");
+      const secondCount = document.querySelector("#second-count");
+
+      let pdfiumPageCount = null;
+
+      function showError(target, error) {
+        target.textContent = error && error.stack ? error.stack : String(error);
+        target.className = "error";
+      }
+
+      function showPageCount(target, count) {
+        target.textContent = `${count} page${count === 1 ? "" : "s"}`;
+        target.className = "ok";
+      }
+
+      async function countPagesTwice(loadBytes) {
+        firstCount.textContent = "running";
+        firstCount.className = "";
+        secondCount.textContent = "running";
+        secondCount.className = "";
+
+        try {
+          showPageCount(firstCount, pdfiumPageCount(await loadBytes()));
+          showPageCount(secondCount, pdfiumPageCount(await loadBytes()));
+        } catch (error) {
+          showError(secondCount, error);
+        }
+      }
 
       try {
         const {
           default: init,
+          pdfium_page_count,
           pdfium_static_init_probe,
           wasmpdf_version,
         } = await import("./pkg-wasi-probe/wasmpdf.js");
         await init();
+        pdfiumPageCount = pdfium_page_count;
         version.textContent = wasmpdf_version();
         const ok = pdfium_static_init_probe();
         probe.textContent = ok ? "initialized" : "failed";
         probe.className = ok ? "ok" : "error";
+        countButton.disabled = !ok;
+        sampleButton.disabled = !ok;
       } catch (error) {
         version.textContent = "failed";
-        probe.textContent = error && error.stack ? error.stack : String(error);
-        probe.className = "error";
+        showError(probe, error);
       }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+
+        const file = fileInput.files[0];
+        if (!file || !pdfiumPageCount) {
+          return;
+        }
+
+        await countPagesTwice(async () => new Uint8Array(await file.arrayBuffer()));
+      });
+
+      sampleButton.addEventListener("click", async () => {
+        if (!pdfiumPageCount) {
+          return;
+        }
+
+        await countPagesTwice(async () => {
+          const response = await fetch("./files/test1.pdf");
+          return new Uint8Array(await response.arrayBuffer());
+        });
+      });
     </script>
   </body>
 </html>
