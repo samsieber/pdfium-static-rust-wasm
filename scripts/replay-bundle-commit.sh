@@ -72,6 +72,7 @@ seed_missing_modified_paths() {
           target_dir=$(dirname "$target_file")
           mkdir -p "$target_dir"
           git -C "$bundle_repo" show "$parent:$source_path" > "$target_file"
+          git -C "$target_repo" add -- "$target_path"
           echo "  seeded missing base file $target_path"
         fi
         ;;
