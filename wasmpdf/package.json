@@ -1,0 +1,11 @@
+{
+  "name": "wasmpdf-smoke",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:wasi-probe": "scripts/build-wasi-probe.sh"
+  },
+  "dependencies": {
+    "@bjorn3/browser_wasi_shim": "^0.4.2"
+  }
+}

@@ -17,6 +17,7 @@ const groups = new Map([
   ["wasm-bindgen/web-sys", []],
   ["C runtime", []],
   ["C++ runtime", []],
+  ["WASI", []],
   ["Pdfium API", []],
   ["other env", []],
   ["other", []],
@@ -66,6 +67,8 @@ for (const item of imports) {
     item.field.includes("St3__")
   ) {
     groups.get("C++ runtime").push(item);
+  } else if (item.module === "wasi_snapshot_preview1") {
+    groups.get("WASI").push(item);
   } else if (cRuntime.has(item.field)) {
     groups.get("C runtime").push(item);
   } else if (item.module === "env") {

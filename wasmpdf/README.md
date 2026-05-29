@@ -37,3 +37,36 @@ node scripts/audit-wasm-imports.mjs
 Those imports are the next integration boundary for the static archive. The
 current list is runtime-shaped: C allocator/string/math/wide-char helpers and
 libc++ ABI/iostream helpers remain as `env` imports.
+
+## WASI shim probe
+
+A WASI-linked probe can collapse the C and C++ runtime imports down to
+`wasi_snapshot_preview1` imports that can be satisfied in the browser with
+`@bjorn3/browser_wasi_shim`.
+
+First install the browser shim:
+
+```sh
+npm install
+```
+
+Then build the WASI probe output:
+
+```sh
+npm run build:wasi-probe
+```
+
+The script expects the local WASI sysroot probe at
+`/private/tmp/wasi-sdk-probe/wasi-sysroot-32.0` by default. Override
+`WASI_SYSROOT` if using another sysroot.
+
+To inspect the remaining imports:
+
+```sh
+node scripts/audit-wasm-imports.mjs pkg-wasi-probe/wasmpdf_bg.wasm
+```
+
+To run it in the browser, serve this directory and open
+`http://127.0.0.1:8080/index-wasi-probe.html`. The page maps the generated
+`wasi_snapshot_preview1` imports to `wasi_snapshot_preview1.js` with an import
+map, then loads `pkg-wasi-probe/wasmpdf.js`.
