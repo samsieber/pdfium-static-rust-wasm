@@ -56,6 +56,9 @@ Then build the WASI probe output:
 npm run build:wasi-probe
 ```
 
+This runs a release `wasm-pack` build. The crate pins `[profile.release]` to
+`opt-level = 3` with LTO enabled.
+
 The script expects the local WASI sysroot probe at
 `/private/tmp/wasi-sdk-probe/wasi-sysroot-32.0` by default. Override
 `WASI_SYSROOT` if using another sysroot.

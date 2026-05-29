@@ -86,8 +86,19 @@ export PDFIUM_STATIC_LIB_PATH=/absolute/path/to/pdfium-bundle/pdfium-lib/build/r
 export WASI_SYSROOT=/absolute/path/to/wasi-sysroot-32.0
 
 export RUSTFLAGS="-L native=${WASI_SYSROOT}/lib/wasm32-wasip1 -l static=c++ -l static=c++abi -l static=c -l static=m"
+```
 
-wasm-pack build --target web --dev --out-dir pkg-wasi
+Use release mode and set an explicit release profile in the consuming crate:
+
+```toml
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+```
+
+```sh
+wasm-pack build --target web --release --out-dir pkg-wasi
 ```
 
 For this repo's probe crate, the same build is wrapped by:

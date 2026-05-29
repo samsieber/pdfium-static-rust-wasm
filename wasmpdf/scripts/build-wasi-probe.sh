@@ -12,4 +12,4 @@ export RUSTFLAGS="-L native=${WASI_SYSROOT}/lib/wasm32-wasip1 -l static=c++ -l s
 export PDFIUM_STATIC_LIB_PATH
 
 cd "${crate_dir}"
-wasm-pack build --target web --dev --out-dir pkg-wasi-probe
+wasm-pack build --target web --release --out-dir pkg-wasi-probe
