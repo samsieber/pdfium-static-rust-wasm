@@ -22,3 +22,7 @@ export const {
   fd_write,
   proc_exit,
 } = wasi.wasiImport;
+
+export function initializeWasi(exports) {
+  wasi.initialize({ exports });
+}

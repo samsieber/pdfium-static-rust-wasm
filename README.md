@@ -1,13 +1,10 @@
 # Static PDFium for WebAssembly
 
-Build a standalone `libpdfium.a` that can be linked into a WebAssembly
-application at compile time. The versioned [patch series](patches/) includes
-the static toolchain and platform changes, optional performance patches,
-and a separate static binding patch for Rust applications.
+This repository demonstrates linking PDFium and its Rust bindings into
+one browser WebAssembly module. The
+[`pdfium-lib` submodule](pdfium-lib) builds `libpdfium.a`, and the
+[`pdfium-render` submodule](pdfium-render) supplies the matching bindings.
 
-See the [build, linking, and upgrade guide](docs/build-pdfium-wasm.md) for
-the validated PDFium 8125 recipe and target requirements. The archive
-builder uses a clean upstream PDFium checkout and requires no Git
-submodules from this repository.
-
-The repository also contains the [original Rust prototype](docs/static-wasm-usage.md).
+See the [integration example](wasmpdf/README.md) to build both inputs
+and render a PDF in the browser. The [standalone 8125 build recipe](docs/build-pdfium-wasm.md)
+records the reference archive used to verify the integrated build.

@@ -107,13 +107,6 @@
         background: #ffffff;
       }
     </style>
-    <script type="importmap">
-      {
-        "imports": {
-          "wasi_snapshot_preview1": "./wasi_snapshot_preview1.js"
-        }
-      }
-    </script>
   </head>
   <body>
     <main>
@@ -198,7 +191,12 @@
           );
           const width = rendered.width;
           const height = rendered.height;
-          const rgba = rendered.bytes();
+          let rgba;
+          try {
+            rgba = rendered.bytes();
+          } finally {
+            rendered.free();
+          }
           const context = pageCanvas.getContext("2d");
 
           pageCanvas.width = width;

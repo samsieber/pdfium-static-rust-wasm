@@ -8,7 +8,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pdfium-render = { path = "../pdfium-render", default-features = false, features = ["pdfium_7543", "image_latest", "static", "console_log"] }
+pdfium-render = { path = "../pdfium-render", default-features = false, features = ["pdfium_8125", "static", "thread_safe"] }
 wasm-bindgen = "0"
 
 [profile.release]

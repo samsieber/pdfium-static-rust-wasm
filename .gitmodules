@@ -1,8 +1,8 @@
 [submodule "pdfium-render"]
 	path = pdfium-render
 	url = https://github.com/samsieber/pdfium-render.git
-	branch = static-wasm32
+	branch = codex/static-wasm-8125-upstream
 [submodule "pdfium-lib"]
 	path = pdfium-lib
 	url = https://github.com/samsieber/pdfium-lib.git
-	branch = static-wasm32
+	branch = codex/static-wasm-8125
