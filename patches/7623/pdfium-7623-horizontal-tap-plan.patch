@@ -1,0 +1,106 @@
+--- a/core/fxge/dib/cstretchengine.cpp
++++ b/core/fxge/dib/cstretchengine.cpp
+@@ -12,6 +12,7 @@
+ #include <cstring>
+ #include <type_traits>
+ #include <utility>
++#include <vector>
+ 
+ #if defined(__wasm_simd128__)
+ #include <wasm_simd128.h>
+@@ -195,6 +196,65 @@
+   return vget_lane_u32(vreinterpret_u32_u8(out), 0);
+ }
+ #endif
++
++struct IndexedTapPair {
++  uint32_t first;
++  uint32_t second;
++  uint32_t first_weight;
++  uint32_t second_weight;
++};
++
++std::vector<IndexedTapPair> BuildIndexedTapPairs(
++    int left,
++    int right,
++    int source_width,
++    const CStretchEngine::WeightTable& table) {
++  const int64_t width = static_cast<int64_t>(right) - left;
++  // Bound the extra allocation independently of the original weight table.
++  constexpr int64_t kMaxPlanBytes = 1 << 20;
++  if (source_width <= 0 || width <= 0 ||
++      width > kMaxPlanBytes / static_cast<int64_t>(sizeof(IndexedTapPair))) {
++    return {};
++  }
++
++  std::vector<IndexedTapPair> pairs;
++  pairs.reserve(static_cast<size_t>(width));
++  for (int col = left; col < right; ++col) {
++    const auto* weights = table.GetPixelWeight(col);
++    const int first = weights->src_start_;
++    const int last = weights->src_end_;
++    if (first < 0 || last < first || last >= source_width || last - first > 1) {
++      return {};
++    }
++    pairs.push_back(
++        {static_cast<uint32_t>(first), static_cast<uint32_t>(last),
++         weights->GetWeightForPosition(first),
++         first == last ? 0u : weights->GetWeightForPosition(last)});
++  }
++  return pairs;
++}
++
++[[clang::noinline]] void StretchIndexedTapPairRow(
++    const uint8_t* src,
++    const uint32_t* palette,
++    uint8_t* dest,
++    pdfium::span<const IndexedTapPair> pairs) {
++  // The caller validates the row sizes and the palette. The plan contains
++  // only valid source indices, including for single-tap columns.
++  UNSAFE_TODO({
++    for (const IndexedTapPair& pair : pairs) {
++      HorizontalAccum accum = AccumulateHorizontal(
++          ZeroHorizontalAccum(), palette[src[pair.first]], pair.first_weight);
++      accum = AccumulateHorizontal(
++          accum, palette[src[pair.second]], pair.second_weight);
++      const uint32_t packed = PackHorizontal(accum);
++      dest[0] = static_cast<uint8_t>(packed);
++      dest[1] = static_cast<uint8_t>(packed >> 8);
++      dest[2] = static_cast<uint8_t>(packed >> 16);
++      dest += 3;
++    }
++  });
++}
+ 
+ // Keep the generic tap loop out of the one- and two-tap interpolation path.
+ [[clang::noinline]] uint32_t StretchIndexedHorizontalManyTaps(
+@@ -581,6 +641,15 @@
+     return true;
+   }
+ 
++#if defined(__wasm_simd128__) || (defined(__aarch64__) && defined(__ARM_NEON))
++  std::vector<IndexedTapPair> indexed_pairs;
++  if (trans_method_ == TransformMethod::k8BppToManyBpp &&
++      dest_format_ == FXDIB_Format::kBgr && src_palette_.size() >= 256) {
++    indexed_pairs = BuildIndexedTapPairs(dest_clip_.left, dest_clip_.right,
++                                        src_width_, weight_table_);
++  }
++#endif
++
+   int Bpp = dest_bpp_ / 8;
+   static const int kStrechPauseRows = 10;
+   int rows_to_go = kStrechPauseRows;
+@@ -631,6 +700,13 @@
+       }
+       case TransformMethod::k8BppToManyBpp: {
+ #if defined(__wasm_simd128__) || (defined(__aarch64__) && defined(__ARM_NEON))
++        if (!indexed_pairs.empty() &&
++            static_cast<size_t>(src_width_) <= src.size() &&
++            indexed_pairs.size() <= dest_span.size() / 3) {
++          StretchIndexedTapPairRow(src.data(), src_palette_.data(),
++                                   dest_span.data(), indexed_pairs);
++          break;
++        }
+         if (dest_format_ == FXDIB_Format::kBgr &&
+             StretchOpaqueHorizontalSimd<3, true>(
+                 src, dest_span, dest_clip_.left, dest_clip_.right,

@@ -1,0 +1,121 @@
+diff --git a/core/fxge/dib/cstretchengine.cpp b/core/fxge/dib/cstretchengine.cpp
+index 3d7bcd0..453cafb 100644
+--- a/core/fxge/dib/cstretchengine.cpp
++++ b/core/fxge/dib/cstretchengine.cpp
+@@ -12,6 +12,10 @@
+ #include <type_traits>
+ #include <utility>
+ 
++#if defined(__wasm_simd128__)
++#include <wasm_simd128.h>
++#endif
++
+ #include "core/fxcrt/check.h"
+ #include "core/fxcrt/fx_safe_types.h"
+ #include "core/fxcrt/fx_system.h"
+@@ -28,6 +32,91 @@ static_assert(
+ 
+ namespace {
+ 
++#if defined(__wasm_simd128__)
++// Filter sixteen adjacent color bytes with the same vertical tap weights.
++// Four-byte formats retain the destination's unused fourth byte.
++bool StretchOpaqueScanlineSimd(pdfium::span<const uint8_t> intermediate,
++                               pdfium::span<uint8_t> dest,
++                               int width,
++                               int bytes_per_pixel,
++                               int pitch,
++                               int source_top,
++                               const CStretchEngine::PixelWeight& weights) {
++  static_assert(CStretchEngine::kFixedPointBits == 16);
++  if ((bytes_per_pixel != 3 && bytes_per_pixel != 4) || width <= 0 || pitch <= 0) {
++    return false;
++  }
++  const size_t stride = static_cast<size_t>(pitch);
++  const size_t bpp = static_cast<size_t>(bytes_per_pixel);
++  const size_t pixels = static_cast<size_t>(width);
++  if (pixels > std::min(stride, dest.size()) / bpp) {
++    return false;
++  }
++  const size_t row_bytes = pixels * bpp;
++  const int64_t first = static_cast<int64_t>(weights.src_start_) - source_top;
++  const int64_t last = static_cast<int64_t>(weights.src_end_) - source_top;
++  if (row_bytes < 16 || first < 0 || last < first ||
++      static_cast<uint64_t>(last) >= intermediate.size() / stride) {
++    return false;
++  }
++
++  const size_t first_row = static_cast<size_t>(first);
++  const size_t taps = static_cast<size_t>(last - first) + 1;
++  const v128_t keep_x = wasm_i8x16_make(0, 0, 0, -1, 0, 0, 0, -1,
++                                        0, 0, 0, -1, 0, 0, 0, -1);
++  const size_t vector_bytes = row_bytes & ~size_t{15};
++
++  // The checks above cover every full input row and the output row. The
++  // vector loop touches only complete blocks, and the scalar tail handles
++  // the remaining bytes without reading pitch padding.
++  UNSAFE_TODO({
++    for (size_t offset = 0; offset < vector_bytes; offset += 16) {
++      v128_t accum0 = wasm_i32x4_splat(0);
++      v128_t accum1 = accum0;
++      v128_t accum2 = accum0;
++      v128_t accum3 = accum0;
++      for (size_t tap = 0; tap < taps; ++tap) {
++        const v128_t input = wasm_v128_load(
++            intermediate.data() + (first_row + tap) * stride + offset);
++        const v128_t lo = wasm_u16x8_extend_low_u8x16(input);
++        const v128_t hi = wasm_u16x8_extend_high_u8x16(input);
++        const v128_t weight = wasm_i32x4_splat(static_cast<int32_t>(
++            weights.GetWeightForPosition(weights.src_start_ + static_cast<int>(tap))));
++        accum0 = wasm_i32x4_add(accum0, wasm_i32x4_mul(wasm_u32x4_extend_low_u16x8(lo), weight));
++        accum1 = wasm_i32x4_add(accum1, wasm_i32x4_mul(wasm_u32x4_extend_high_u16x8(lo), weight));
++        accum2 = wasm_i32x4_add(accum2, wasm_i32x4_mul(wasm_u32x4_extend_low_u16x8(hi), weight));
++        accum3 = wasm_i32x4_add(accum3, wasm_i32x4_mul(wasm_u32x4_extend_high_u16x8(hi), weight));
++      }
++      // Selecting byte 2 of each 32-bit sum equals PixelFromFixed, including
++      // its truncation to eight bits.
++      const v128_t low_bytes = wasm_i8x16_shuffle(accum0, accum1,
++          2, 6, 10, 14, 18, 22, 26, 30, 0, 0, 0, 0, 0, 0, 0, 0);
++      const v128_t high_bytes = wasm_i8x16_shuffle(accum2, accum3,
++          2, 6, 10, 14, 18, 22, 26, 30, 0, 0, 0, 0, 0, 0, 0, 0);
++      v128_t packed = wasm_i8x16_shuffle(low_bytes, high_bytes,
++          0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23);
++      if (bpp == 4) {
++        packed = wasm_v128_bitselect(wasm_v128_load(dest.data() + offset), packed, keep_x);
++      }
++      wasm_v128_store(dest.data() + offset, packed);
++    }
++    for (size_t offset = vector_bytes; offset < row_bytes; ++offset) {
++      if (bpp == 4 && offset % 4 == 3) {
++        continue;
++      }
++      uint32_t accum = 0;
++      for (size_t tap = 0; tap < taps; ++tap) {
++        const uint32_t weight = weights.GetWeightForPosition(
++            weights.src_start_ + static_cast<int>(tap));
++        accum += weight * intermediate[(first_row + tap) * stride + offset];
++      }
++      dest[offset] = CStretchEngine::PixelFromFixed(accum);
++    }
++  });
++  return true;
++}
++#endif
++
+ size_t TotalBytesForWeightCount(size_t weight_count) {
+   // Always room for one weight even for empty ranges due to declaration
+   // of weights_[1] in the header. Don't shrink below this since
+@@ -486,6 +575,13 @@ void CStretchEngine::StretchVert() {
+       }
+       case TransformMethod::k8BppToManyBpp:
+       case TransformMethod::kManyBpptoManyBpp: {
++#if defined(__wasm_simd128__)
++        if (StretchOpaqueScanlineSimd(inter_buf_, dest_scanline_,
++                                     dest_clip_.Width(), DestBpp, inter_pitch_,
++                                     src_clip_.top, *pWeights)) {
++          break;
++        }
++#endif
+         for (int col = dest_clip_.left; col < dest_clip_.right; ++col) {
+           pdfium::span<const uint8_t> src_span =
+               inter_buf_.subspan((col - dest_clip_.left) * DestBpp);

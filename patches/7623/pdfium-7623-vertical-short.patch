@@ -1,0 +1,101 @@
+--- a/core/fxge/dib/cstretchengine.cpp
++++ b/core/fxge/dib/cstretchengine.cpp
+@@ -37,6 +37,70 @@
+ namespace {
+ 
+ #if defined(__wasm_simd128__) || (defined(__aarch64__) && defined(__ARM_NEON))
++// The caller has validated both rows. Each positive coefficient fits in 16
++// bits and their sum is at most 65536, so the shifted result fits in a byte.
++[[clang::noinline]] void BlendVerticalBgrRows(
++    const uint8_t* first,
++    const uint8_t* second,
++    uint8_t* dest,
++    size_t bytes,
++    uint16_t first_weight,
++    uint16_t second_weight) {
++  const size_t vector_bytes = bytes & ~size_t{15};
++#if defined(__wasm_simd128__)
++  const v128_t w0 = wasm_i16x8_splat(first_weight);
++  const v128_t w1 = wasm_i16x8_splat(second_weight);
++#endif
++  UNSAFE_TODO({
++    for (size_t offset = 0; offset < vector_bytes; offset += 16) {
++#if defined(__wasm_simd128__)
++      const v128_t a = wasm_v128_load(first + offset);
++      const v128_t b = wasm_v128_load(second + offset);
++      const v128_t a0 = wasm_u16x8_extend_low_u8x16(a);
++      const v128_t a1 = wasm_u16x8_extend_high_u8x16(a);
++      const v128_t b0 = wasm_u16x8_extend_low_u8x16(b);
++      const v128_t b1 = wasm_u16x8_extend_high_u8x16(b);
++      const v128_t s0 = wasm_i32x4_add(wasm_u32x4_extmul_low_u16x8(a0, w0),
++                                      wasm_u32x4_extmul_low_u16x8(b0, w1));
++      const v128_t s1 = wasm_i32x4_add(wasm_u32x4_extmul_high_u16x8(a0, w0),
++                                      wasm_u32x4_extmul_high_u16x8(b0, w1));
++      const v128_t s2 = wasm_i32x4_add(wasm_u32x4_extmul_low_u16x8(a1, w0),
++                                      wasm_u32x4_extmul_low_u16x8(b1, w1));
++      const v128_t s3 = wasm_i32x4_add(wasm_u32x4_extmul_high_u16x8(a1, w0),
++                                      wasm_u32x4_extmul_high_u16x8(b1, w1));
++      const v128_t lo = wasm_i16x8_shuffle(s0, s1, 1, 3, 5, 7, 9, 11, 13, 15);
++      const v128_t hi = wasm_i16x8_shuffle(s2, s3, 1, 3, 5, 7, 9, 11, 13, 15);
++      wasm_v128_store(dest + offset, wasm_u8x16_narrow_i16x8(lo, hi));
++#else
++      const uint8x16_t a = vld1q_u8(first + offset);
++      const uint8x16_t b = vld1q_u8(second + offset);
++      const uint16x8_t a0 = vmovl_u8(vget_low_u8(a));
++      const uint16x8_t a1 = vmovl_high_u8(a);
++      const uint16x8_t b0 = vmovl_u8(vget_low_u8(b));
++      const uint16x8_t b1 = vmovl_high_u8(b);
++      const uint32x4_t s0 = vmlal_n_u16(
++          vmull_n_u16(vget_low_u16(a0), first_weight), vget_low_u16(b0),
++          second_weight);
++      const uint32x4_t s1 = vmlal_high_n_u16(
++          vmull_high_n_u16(a0, first_weight), b0, second_weight);
++      const uint32x4_t s2 = vmlal_n_u16(
++          vmull_n_u16(vget_low_u16(a1), first_weight), vget_low_u16(b1),
++          second_weight);
++      const uint32x4_t s3 = vmlal_high_n_u16(
++          vmull_high_n_u16(a1, first_weight), b1, second_weight);
++      const uint16x8_t lo = vshrn_high_n_u32(vshrn_n_u32(s0, 16), s1, 16);
++      const uint16x8_t hi = vshrn_high_n_u32(vshrn_n_u32(s2, 16), s3, 16);
++      vst1q_u8(dest + offset, vmovn_high_u16(vmovn_u16(lo), hi));
++#endif
++    }
++    for (size_t offset = vector_bytes; offset < bytes; ++offset) {
++      dest[offset] = CStretchEngine::PixelFromFixed(
++          uint32_t{first_weight} * first[offset] +
++          uint32_t{second_weight} * second[offset]);
++    }
++  });
++}
++
+ // Filter sixteen adjacent color bytes with the same vertical tap weights.
+ // Four-byte formats retain the destination's unused fourth byte.
+ bool StretchOpaqueScanlineSimd(pdfium::span<const uint8_t> intermediate,
+@@ -66,6 +130,27 @@
+ 
+   const size_t first_row = static_cast<size_t>(first);
+   const size_t taps = static_cast<size_t>(last - first) + 1;
++  if (bpp == 3 && taps <= 2) {
++    const uint32_t w0 = weights.GetWeightForPosition(weights.src_start_);
++    const uint32_t w1 =
++        taps == 2 ? weights.GetWeightForPosition(weights.src_end_) : 0;
++    constexpr uint32_t kOne = 1 << CStretchEngine::kFixedPointBits;
++    // Keep the generic path for coefficients outside the narrow SIMD range.
++    if (w0 <= kOne && w1 <= kOne && w0 + w1 <= kOne) {
++      const auto first_src = intermediate.subspan(first_row * stride, row_bytes);
++      const auto last_src = intermediate.subspan(
++          static_cast<size_t>(last) * stride, row_bytes);
++      if (w0 == kOne || w1 == kOne) {
++        const auto src = w0 == kOne ? first_src : last_src;
++        std::memcpy(dest.data(), src.data(), row_bytes);
++        return true;
++      }
++      BlendVerticalBgrRows(first_src.data(), last_src.data(), dest.data(),
++                           row_bytes, static_cast<uint16_t>(w0),
++                           static_cast<uint16_t>(w1));
++      return true;
++    }
++  }
+ #if defined(__wasm_simd128__)
+   const v128_t keep_x = wasm_i8x16_make(0, 0, 0, -1, 0, 0, 0, -1,
+                                         0, 0, 0, -1, 0, 0, 0, -1);

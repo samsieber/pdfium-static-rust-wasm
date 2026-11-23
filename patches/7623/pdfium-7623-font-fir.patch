@@ -1,0 +1,129 @@
+--- a/third_party/freetype/src/src/base/ftlcdfil.c
++++ b/third_party/freetype/src/src/base/ftlcdfil.c
+@@ -23,6 +23,10 @@
+ #include <freetype/internal/ftobjs.h>
+ 
+ 
++#if defined(__wasm_simd128__)
++#include <wasm_simd128.h>
++#endif
++
+ #ifdef FT_CONFIG_OPTION_SUBPIXEL_RENDERING
+ 
+ /* define USE_LEGACY to implement the legacy filter */
+@@ -73,6 +77,97 @@
+   }
+ 
+ 
++#if defined(__wasm_simd128__)
++  static v128_t
++  ft_lcd_filter_fir_half( v128_t  x0,
++                          v128_t  x1,
++                          v128_t  x2,
++                          v128_t  x3,
++                          v128_t  x4,
++                          v128_t  w0,
++                          v128_t  w1,
++                          v128_t  w2,
++                          v128_t  w3,
++                          v128_t  w4 )
++  {
++    v128_t  sum = wasm_i16x8_mul( x0, w0 );
++
++
++    sum = wasm_i16x8_add( sum, wasm_i16x8_mul( x1, w1 ) );
++    sum = wasm_i16x8_add( sum, wasm_i16x8_mul( x2, w2 ) );
++    sum = wasm_i16x8_add( sum, wasm_i16x8_mul( x3, w3 ) );
++    sum = wasm_i16x8_add( sum, wasm_i16x8_mul( x4, w4 ) );
++    return wasm_u16x8_shr( sum, 8 );
++  }
++
++
++  static void
++  ft_lcd_filter_horizontal_simd( FT_Byte*            line,
++                                 FT_UInt             width,
++                                 FT_LcdFiveTapFilter weights )
++  {
++    const v128_t  w0 = wasm_i16x8_splat( weights[0] );
++    const v128_t  w1 = wasm_i16x8_splat( weights[1] );
++    const v128_t  w2 = wasm_i16x8_splat( weights[2] );
++    const v128_t  w3 = wasm_i16x8_splat( weights[3] );
++    const v128_t  w4 = wasm_i16x8_splat( weights[4] );
++    FT_UInt       previous = 0;
++    FT_UInt       x = 0;
++
++
++    for ( ; width - x >= 16; x += 16 )
++    {
++      const FT_UInt  next = ( width - x > 16 ? line[x + 16] : 0 ) |
++                            ( width - x > 17 ? (FT_UInt)line[x + 17] << 8 : 0 );
++      const v128_t   before = wasm_i16x8_splat( (int16_t)previous );
++      const v128_t   after = wasm_i16x8_splat( (int16_t)next );
++      const v128_t   center = wasm_v128_load( line + x );
++      const v128_t   left2 = wasm_i8x16_shuffle(
++          before, center, 0, 1, 16, 17, 18, 19, 20, 21,
++          22, 23, 24, 25, 26, 27, 28, 29 );
++      const v128_t   left1 = wasm_i8x16_shuffle(
++          before, center, 1, 16, 17, 18, 19, 20, 21, 22,
++          23, 24, 25, 26, 27, 28, 29, 30 );
++      const v128_t   right1 = wasm_i8x16_shuffle(
++          center, after, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 );
++      const v128_t   right2 = wasm_i8x16_shuffle(
++          center, after, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17 );
++      const v128_t   lo = ft_lcd_filter_fir_half(
++          wasm_u16x8_extend_low_u8x16( right2 ),
++          wasm_u16x8_extend_low_u8x16( right1 ),
++          wasm_u16x8_extend_low_u8x16( center ),
++          wasm_u16x8_extend_low_u8x16( left1 ),
++          wasm_u16x8_extend_low_u8x16( left2 ), w0, w1, w2, w3, w4 );
++      const v128_t   hi = ft_lcd_filter_fir_half(
++          wasm_u16x8_extend_high_u8x16( right2 ),
++          wasm_u16x8_extend_high_u8x16( right1 ),
++          wasm_u16x8_extend_high_u8x16( center ),
++          wasm_u16x8_extend_high_u8x16( left1 ),
++          wasm_u16x8_extend_high_u8x16( left2 ), w0, w1, w2, w3, w4 );
++
++
++      /* Carry the original neighboring bytes across the in-place store. */
++      previous = wasm_u16x8_extract_lane( center, 7 );
++      wasm_v128_store( line + x, wasm_u8x16_narrow_i16x8( lo, hi ) );
++    }
++
++    for ( ; x < width; x++ )
++    {
++      const FT_UInt  center = line[x];
++      const FT_UInt  right1 = width - x > 1 ? line[x + 1] : 0;
++      const FT_UInt  right2 = width - x > 2 ? line[x + 2] : 0;
++      FT_UInt  sum = weights[0] * right2 + weights[1] * right1 +
++                     weights[2] * center + weights[3] * ( previous >> 8 ) +
++                     weights[4] * ( previous & 255 );
++
++
++      previous = ( previous >> 8 ) | ( center << 8 );
++      line[x] = FT_SHIFTCLAMP( sum );
++    }
++  }
++#endif
++
++
+   /* FIR filter used by the default and light filters */
+   FT_BASE_DEF( void )
+   ft_lcd_filter_fir( FT_Bitmap*           bitmap,
+@@ -94,6 +189,17 @@
+     {
+       FT_Byte*  line = origin;
+ 
++
++#if defined(__wasm_simd128__)
++      /* Keep the original 32-bit path for weights that can overflow u16. */
++      if ( width >= 16 && weights[0] + weights[1] + weights[2] +
++                           weights[3] + weights[4] <= 257 )
++      {
++        for ( ; height > 0; height--, line -= pitch )
++          ft_lcd_filter_horizontal_simd( line, width, weights );
++        return;
++      }
++#endif
+ 
+       /* `fir' must be at least 32 bit wide, since the sum of */
+       /* the values in `weights' can exceed 0xFF              */

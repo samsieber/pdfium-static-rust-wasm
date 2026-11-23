@@ -1,0 +1,20 @@
+is_debug = false
+pdf_use_partition_alloc = false
+target_cpu = "wasm"
+target_os = "wasm32"
+pdf_enable_v8 = false
+pdf_enable_xfa = false
+treat_warnings_as_errors = false
+is_component_build = false
+symbol_level = 0
+is_official_build = true
+pdf_is_complete_lib = true
+pdf_is_standalone = true
+is_clang = true
+use_custom_libcxx = false
+clang_use_chrome_plugins = false
+is_component_build = false
+rust_wasm_target = "wasm32-unknown-unknown"
+rust_wasm_sysroot_target = "wasm32-wasip1"
+
+rust_wasm_simd = true

@@ -1,0 +1,227 @@
+diff --git a/core/fxge/dib/cfx_scanlinecompositor.cpp b/core/fxge/dib/cfx_scanlinecompositor.cpp
+index fd78643..81c8384 100644
+--- a/core/fxge/dib/cfx_scanlinecompositor.cpp
++++ b/core/fxge/dib/cfx_scanlinecompositor.cpp
+@@ -7,8 +7,15 @@
+ #include "core/fxge/dib/cfx_scanlinecompositor.h"
+ 
+ #include <algorithm>
++#include <functional>
+ #include <type_traits>
+ 
++#if defined(__wasm_simd128__)
++#include <wasm_simd128.h>
++#elif defined(__aarch64__) && defined(__ARM_NEON)
++#include <arm_neon.h>
++#endif
++
+ #include "core/fxcrt/check.h"
+ #include "core/fxcrt/check_op.h"
+ #include "core/fxcrt/compiler_specific.h"
+@@ -416,6 +423,51 @@ void CompositeRow_Bgr2Bgra_NoBlend_Clip(pdfium::span<uint8_t> dest_span,
+   });
+ }
+ 
++#if defined(__wasm_simd128__)
++template <bool kRgbOrder, int Start>
++v128_t ExpandFourBgrPixels(v128_t first, v128_t second) {
++  constexpr int kFirstColor = kRgbOrder ? 2 : 0;
++  constexpr int kThirdColor = kRgbOrder ? 0 : 2;
++  const v128_t pixels = wasm_i8x16_shuffle(
++      first, second, Start + kFirstColor, Start + 1, Start + kThirdColor, 0,
++      Start + 3 + kFirstColor, Start + 4, Start + 3 + kThirdColor, 0,
++      Start + 6 + kFirstColor, Start + 7, Start + 6 + kThirdColor, 0,
++      Start + 9 + kFirstColor, Start + 10, Start + 9 + kThirdColor, 0);
++  return wasm_v128_or(pixels, wasm_i32x4_splat(-16777216));
++}
++#endif
++
++#if defined(__wasm_simd128__) || (defined(__aarch64__) && defined(__ARM_NEON))
++template <bool kRgbOrder>
++[[clang::noinline]] void ExpandBgrBlocks(const uint8_t* source,
++                                        uint8_t* dest,
++                                        size_t blocks) {
++  // Each block reads exactly 48 source bytes and writes 64 output bytes.
++  UNSAFE_TODO({
++    for (; blocks != 0; --blocks, source += 48, dest += 64) {
++#if defined(__wasm_simd128__)
++      const v128_t first = wasm_v128_load(source);
++      const v128_t middle = wasm_v128_load(source + 16);
++      const v128_t last = wasm_v128_load(source + 32);
++      wasm_v128_store(dest, ExpandFourBgrPixels<kRgbOrder, 0>(first, first));
++      wasm_v128_store(dest + 16,
++                      ExpandFourBgrPixels<kRgbOrder, 12>(first, middle));
++      wasm_v128_store(dest + 32,
++                      ExpandFourBgrPixels<kRgbOrder, 8>(middle, last));
++      wasm_v128_store(dest + 48, ExpandFourBgrPixels<kRgbOrder, 4>(last, last));
++#else
++      const uint8x16x3_t bgr = vld3q_u8(source);
++      const uint8x16x4_t pixels = {{
++          bgr.val[kRgbOrder ? 2 : 0], bgr.val[1],
++          bgr.val[kRgbOrder ? 0 : 2], vdupq_n_u8(255),
++      }};
++      vst4q_u8(dest, pixels);
++#endif
++    }
++  });
++}
++#endif
++
+ // Copies a source pixel into a BGRA destination, forcing it opaque. The
+ // source may carry an alpha channel or not; it is ignored either way.
+ template <typename SrcPixelStruct, typename DestPixelStruct>
+@@ -442,6 +494,29 @@ void CompositeRow_Bgr2Bgra_NoBlend_NoClip(
+     pdfium::span<DestPixelStruct> dest_span,
+     pdfium::span<const uint8_t> src_span,
+     int src_Bpp) {
++#if defined(__wasm_simd128__) || (defined(__aarch64__) && defined(__ARM_NEON))
++  static_assert(sizeof(DestPixelStruct) == 4);
++  const size_t blocks = dest_span.size() / 16;
++  if (src_Bpp == 3 && blocks != 0 &&
++      dest_span.size() <= src_span.size() / 3) {
++    const auto source = src_span.first(dest_span.size() * 3);
++    auto* out = reinterpret_cast<uint8_t*>(dest_span.data());
++    const auto* out_end = reinterpret_cast<const uint8_t*>(
++        UNSAFE_TODO(dest_span.data() + dest_span.size()));
++    const auto* source_end = UNSAFE_TODO(source.data() + source.size());
++    const std::less<const uint8_t*> less;
++    if (!less(out, source_end) || !less(source.data(), out_end)) {
++      constexpr bool kRgbOrder =
++          std::is_same_v<DestPixelStruct, FX_RGBA_STRUCT<uint8_t>>;
++      ExpandBgrBlocks<kRgbOrder>(source.data(), out, blocks);
++      dest_span = dest_span.subspan(blocks * 16);
++      src_span = src_span.subspan(blocks * 48);
++      if (dest_span.empty()) {
++        return;
++      }
++    }
++  }
++#endif
+   const size_t width = dest_span.size();
+   if (src_Bpp == 3) {
+     auto bgr_span = fxcrt::reinterpret_span<const FX_BGR_STRUCT<uint8_t>>(
+@@ -625,11 +700,124 @@ void CompositePixelBgra2BgraNoBlend(const FX_BGRA_STRUCT<uint8_t>& input,
+   output.alpha = dest_alpha;
+ }
+ 
++#if defined(__wasm_simd128__) || (defined(__aarch64__) && defined(__ARM_NEON))
++#if defined(__wasm_simd128__)
++v128_t BlendOpaqueBgraHalf(v128_t src, v128_t dest, v128_t alpha) {
++  const v128_t complement = wasm_i16x8_sub(wasm_i16x8_splat(255), alpha);
++  const v128_t sum = wasm_i16x8_add(wasm_i16x8_mul(src, alpha),
++                                   wasm_i16x8_mul(dest, complement));
++  // For sums up to 255 * 255, this is exact integer division by 255.
++  const v128_t rounded = wasm_i16x8_add(sum, wasm_i16x8_splat(1));
++  return wasm_u16x8_shr(wasm_i16x8_add(rounded, wasm_u16x8_shr(rounded, 8)), 8);
++}
++#else
++uint8x8_t BlendOpaqueBgraHalf(uint8x8_t src, uint8x8_t dest, uint8x8_t alpha) {
++  const uint8x8_t complement = vmvn_u8(alpha);
++  const uint16x8_t sum = vmlal_u8(vmull_u8(src, alpha), dest, complement);
++  const uint16x8_t rounded = vaddq_u16(sum, vdupq_n_u16(1));
++  return vshrn_n_u16(vaddq_u16(rounded, vshrq_n_u16(rounded, 8)), 8);
++}
++#endif
++
++template <typename DestPixelStruct>
++[[clang::noinline]] void CompositeNormalBgraRow(
++    const FX_BGRA_STRUCT<uint8_t>* src,
++    DestPixelStruct* dest,
++    size_t count) {
++  static_assert(sizeof(FX_BGRA_STRUCT<uint8_t>) == 4);
++  static_assert(sizeof(DestPixelStruct) == 4);
++  const auto blend_pixel = [](const auto& input, auto& output) {
++    const auto src_alpha = input.alpha;
++    if (output.alpha == 0) {
++      CopyColorComponents(input, output);
++      output.alpha = src_alpha;
++    } else if (src_alpha != 0) {
++      if (output.alpha == 255) {
++        AlphaMergeToDest(input, output, src_alpha);
++      } else {
++        CompositePixelBgra2BgraNoBlend(input, src_alpha, output);
++      }
++    }
++  };
++  // The caller checks both spans once. Blocks with any translucent destination
++  // keep the scalar straight-alpha behavior, including hidden RGB.
++  UNSAFE_TODO({
++    while (count >= 4) {
++#if defined(__wasm_simd128__)
++      const v128_t old = wasm_v128_load(dest);
++      const v128_t mask = wasm_i32x4_splat(static_cast<int32_t>(0xff000000u));
++      if (wasm_i32x4_all_true(wasm_i32x4_eq(wasm_v128_and(old, mask), mask))) {
++        v128_t pixels = wasm_v128_load(src);
++        if (wasm_v128_any_true(wasm_v128_and(pixels, mask))) {
++          if constexpr (std::is_same_v<DestPixelStruct, FX_RGBA_STRUCT<uint8_t>>) {
++            pixels = wasm_i8x16_shuffle(pixels, pixels, 2, 1, 0, 3, 6, 5,
++                                        4, 7, 10, 9, 8, 11, 14, 13, 12, 15);
++          }
++          const v128_t alpha = wasm_i8x16_shuffle(pixels, pixels, 3, 3, 3, 3,
++              7, 7, 7, 7, 11, 11, 11, 11, 15, 15, 15, 15);
++          const v128_t lo = BlendOpaqueBgraHalf(
++              wasm_u16x8_extend_low_u8x16(pixels),
++              wasm_u16x8_extend_low_u8x16(old),
++              wasm_u16x8_extend_low_u8x16(alpha));
++          const v128_t hi = BlendOpaqueBgraHalf(
++              wasm_u16x8_extend_high_u8x16(pixels),
++              wasm_u16x8_extend_high_u8x16(old),
++              wasm_u16x8_extend_high_u8x16(alpha));
++          wasm_v128_store(dest, wasm_v128_or(wasm_u8x16_narrow_i16x8(lo, hi), mask));
++        }
++      } else
++#else
++      const uint8x16_t old = vld1q_u8(reinterpret_cast<const uint8_t*>(dest));
++      const uint32x4_t mask = vdupq_n_u32(0xff000000u);
++      if (vminvq_u32(vandq_u32(vreinterpretq_u32_u8(old), mask)) ==
++          0xff000000u) {
++        uint8x16_t pixels = vld1q_u8(reinterpret_cast<const uint8_t*>(src));
++        if (vmaxvq_u32(vandq_u32(vreinterpretq_u32_u8(pixels), mask)) != 0) {
++          if constexpr (std::is_same_v<DestPixelStruct, FX_RGBA_STRUCT<uint8_t>>) {
++            const uint8x16_t swap_rb = {2, 1, 0, 3, 6, 5, 4, 7,
++                                        10, 9, 8, 11, 14, 13, 12, 15};
++            pixels = vqtbl1q_u8(pixels, swap_rb);
++          }
++          const uint8x16_t alpha_index = {3, 3, 3, 3, 7, 7, 7, 7,
++                                           11, 11, 11, 11, 15, 15, 15, 15};
++          const uint8x16_t alpha = vqtbl1q_u8(pixels, alpha_index);
++          const uint8x8_t lo = BlendOpaqueBgraHalf(
++              vget_low_u8(pixels), vget_low_u8(old), vget_low_u8(alpha));
++          const uint8x8_t hi = BlendOpaqueBgraHalf(
++              vget_high_u8(pixels), vget_high_u8(old), vget_high_u8(alpha));
++          vst1q_u8(reinterpret_cast<uint8_t*>(dest),
++                   vorrq_u8(vcombine_u8(lo, hi), vreinterpretq_u8_u32(mask)));
++        }
++      } else
++#endif
++      {
++        for (size_t i = 0; i < 4; ++i) {
++          blend_pixel(src[i], dest[i]);
++        }
++      }
++      src += 4;
++      dest += 4;
++      count -= 4;
++    }
++    for (size_t i = 0; i < count; ++i) {
++      blend_pixel(src[i], dest[i]);
++    }
++  });
++}
++#endif
++
+ template <typename DestPixelStruct>
+ void CompositeRowBgra2Bgra(pdfium::span<const FX_BGRA_STRUCT<uint8_t>> src_span,
+                            pdfium::span<const uint8_t> clip_span,
+                            pdfium::span<DestPixelStruct> dest_span,
+                            BlendMode blend_type) {
++#if defined(__wasm_simd128__) || (defined(__aarch64__) && defined(__ARM_NEON))
++  if (clip_span.empty() && blend_type == BlendMode::kNormal &&
++      src_span.size() <= dest_span.size()) {
++    CompositeNormalBgraRow(src_span.data(), dest_span.data(), src_span.size());
++    return;
++  }
++#endif
+   const bool non_separable_blend = IsNonSeparableBlendMode(blend_type);
+   if (clip_span.empty()) {
+     if (non_separable_blend) {

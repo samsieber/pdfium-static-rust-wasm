@@ -1,0 +1,88 @@
+--- a/core/fxge/dib/cfx_scanlinecompositor.cpp
++++ b/core/fxge/dib/cfx_scanlinecompositor.cpp
+@@ -7,6 +7,8 @@
+ #include "core/fxge/dib/cfx_scanlinecompositor.h"
+ 
+ #include <algorithm>
++#include <functional>
++#include <type_traits>
+ 
+ #if defined(__wasm_simd128__)
+ #include <wasm_simd128.h>
+@@ -423,11 +425,76 @@
+   });
+ }
+ 
++#if defined(__wasm_simd128__)
++template <bool kRgbOrder, int Start>
++v128_t ExpandFourBgrPixels(v128_t first, v128_t second) {
++  constexpr int kFirstColor = kRgbOrder ? 2 : 0;
++  constexpr int kThirdColor = kRgbOrder ? 0 : 2;
++  const v128_t pixels = wasm_i8x16_shuffle(
++      first, second, Start + kFirstColor, Start + 1, Start + kThirdColor, 0,
++      Start + 3 + kFirstColor, Start + 4, Start + 3 + kThirdColor, 0,
++      Start + 6 + kFirstColor, Start + 7, Start + 6 + kThirdColor, 0,
++      Start + 9 + kFirstColor, Start + 10, Start + 9 + kThirdColor, 0);
++  return wasm_v128_or(pixels, wasm_i32x4_splat(-16777216));
++}
++#endif
++
++#if defined(__wasm_simd128__) || (defined(__aarch64__) && defined(__ARM_NEON))
++template <bool kRgbOrder>
++[[clang::noinline]] void ExpandBgrBlocks(const uint8_t* source,
++                                        uint8_t* dest,
++                                        size_t blocks) {
++  // Each block reads exactly 48 source bytes and writes 64 output bytes.
++  UNSAFE_TODO({
++    for (; blocks != 0; --blocks, source += 48, dest += 64) {
++#if defined(__wasm_simd128__)
++      const v128_t first = wasm_v128_load(source);
++      const v128_t middle = wasm_v128_load(source + 16);
++      const v128_t last = wasm_v128_load(source + 32);
++      wasm_v128_store(dest, ExpandFourBgrPixels<kRgbOrder, 0>(first, first));
++      wasm_v128_store(dest + 16,
++                      ExpandFourBgrPixels<kRgbOrder, 12>(first, middle));
++      wasm_v128_store(dest + 32,
++                      ExpandFourBgrPixels<kRgbOrder, 8>(middle, last));
++      wasm_v128_store(dest + 48, ExpandFourBgrPixels<kRgbOrder, 4>(last, last));
++#else
++      const uint8x16x3_t bgr = vld3q_u8(source);
++      const uint8x16x4_t pixels = {{
++          bgr.val[kRgbOrder ? 2 : 0], bgr.val[1],
++          bgr.val[kRgbOrder ? 0 : 2], vdupq_n_u8(255),
++      }};
++      vst4q_u8(dest, pixels);
++#endif
++    }
++  });
++}
++#endif
++
+ template <typename DestPixelStruct>
+ void CompositeRow_Bgr2Bgra_NoBlend_NoClip(
+     pdfium::span<DestPixelStruct> dest_span,
+     pdfium::span<const uint8_t> src_span,
+     size_t src_Bpp) {
++#if defined(__wasm_simd128__) || (defined(__aarch64__) && defined(__ARM_NEON))
++  static_assert(sizeof(DestPixelStruct) == 4);
++  const size_t blocks = dest_span.size() / 16;
++  if (src_Bpp == 3 && blocks != 0 &&
++      dest_span.size() <= src_span.size() / 3) {
++    const auto source = src_span.first(dest_span.size() * 3);
++    auto* out = reinterpret_cast<uint8_t*>(dest_span.data());
++    const auto* out_end = reinterpret_cast<const uint8_t*>(
++        UNSAFE_TODO(dest_span.data() + dest_span.size()));
++    const auto* source_end = UNSAFE_TODO(source.data() + source.size());
++    const std::less<const uint8_t*> less;
++    if (!less(out, source_end) || !less(source.data(), out_end)) {
++      constexpr bool kRgbOrder =
++          std::is_same_v<DestPixelStruct, FX_RGBA_STRUCT<uint8_t>>;
++      ExpandBgrBlocks<kRgbOrder>(source.data(), out, blocks);
++      dest_span = dest_span.subspan(blocks * 16);
++      src_span = src_span.subspan(blocks * 48);
++    }
++  }
++#endif
+   for (auto& dest : dest_span) {
+     dest.blue = src_span[0];
+     dest.green = src_span[1];

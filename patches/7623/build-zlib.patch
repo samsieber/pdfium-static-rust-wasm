@@ -1,0 +1,20 @@
+diff --git a/BUILD.gn b/BUILD.gn
+index eff72b2..e918bb3 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -325,6 +325,15 @@ component("zlib") {
+     "zutil.h",
+   ]
+ 
++  if (current_os == "wasm32") {
++    sources -= [
++      "gzclose.c",
++      "gzlib.c",
++      "gzread.c",
++      "gzwrite.c",
++    ]
++  }
++
+   defines = []
+   deps = []
+ 

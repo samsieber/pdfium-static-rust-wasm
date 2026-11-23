@@ -1,1 +1,13 @@
-This repository is where I'm developing a fork of pdfium-lib and pdfium-render that together will let a rust based project emit a single wasm file for the both of them, targeting wasm32-unknown-unknown using wasm-pack, with perhaps a small js shim required
+# Static PDFium for WebAssembly
+
+Build a standalone `libpdfium.a` that can be linked into a WebAssembly
+application at compile time. The versioned [patch series](patches/) includes
+the static toolchain and platform changes, optional performance patches,
+and a separate static binding patch for Rust applications.
+
+See the [build, linking, and upgrade guide](docs/build-pdfium-wasm.md) for
+the validated PDFium 8125 recipe and target requirements. The archive
+builder uses a clean upstream PDFium checkout and requires no Git
+submodules from this repository.
+
+The repository also contains the [original Rust prototype](docs/static-wasm-usage.md).

@@ -1,0 +1,624 @@
+diff --git a/core/fxcrt/BUILD.gn b/core/fxcrt/BUILD.gn
+index 796a10a..d6da3f0 100644
+--- a/core/fxcrt/BUILD.gn
++++ b/core/fxcrt/BUILD.gn
+@@ -159,13 +159,26 @@ source_set("fxcrt") {
+   } else {
+     sources += [ "fx_memory_malloc.cpp" ]
+   }
+-  if (is_posix) {
++  if (is_posix && !is_wasm) {
+     sources += [
+       "cfx_fileaccess_posix.cpp",
+       "cfx_fileaccess_posix.h",
+       "fx_folder_posix.cpp",
+     ]
+   }
++  if (is_wasm) {
++    defines = [
++      "getpid=pdfium_wasm_fxcrt_getpid",
++      "gettimeofday=pdfium_wasm_fxcrt_gettimeofday",
++      "time=pdfium_wasm_fxcrt_time",
++      "localtime=pdfium_wasm_fxcrt_localtime",
++    ]
++    sources += [
++      "cfx_fileaccess_wasm.cpp",
++      "fx_folder_wasm.cpp",
++      "fx_wasm_time_random.cpp",
++    ]
++  }
+   if (is_win) {
+     sources += [
+       "cfx_fileaccess_windows.cpp",
+diff --git a/core/fxge/BUILD.gn b/core/fxge/BUILD.gn
+index 933f538..0cced42 100644
+--- a/core/fxge/BUILD.gn
++++ b/core/fxge/BUILD.gn
+@@ -166,7 +166,13 @@ source_set("fxge") {
+     ]
+   }
+ 
+-  if (is_linux || is_chromeos) {
++  if (is_wasm) {
++    sources -= [
++      "cfx_folderfontinfo.cpp",
++      "cfx_folderfontinfo.h",
++    ]
++    sources += [ "wasm/fx_wasm_impl.cpp" ]
++  } else if (is_linux || is_chromeos) {
+     sources += [ "linux/fx_linux_impl.cpp" ]
+   }
+ 
+diff --git a/third_party/BUILD.gn b/third_party/BUILD.gn
+index dfb74ec..6ce9fa0 100644
+--- a/third_party/BUILD.gn
++++ b/third_party/BUILD.gn
+@@ -53,6 +53,12 @@ if (pdf_bundle_freetype) {
+       "FT_CONFIG_MODULES_H=\"freetype-custom-config/ftmodule.h\"",
+       "FT_CONFIG_OPTIONS_H=\"freetype-custom-config/ftoption.h\"",
+     ]
++
++    if (current_os == "wasm32") {
++      defines += [
++        "FT_CONFIG_STANDARD_LIBRARY_H=\"freetype-custom-config/ftstdlib-wasm.h\"",
++      ]
++    }
+   }
+ 
+   config("freetype_private_config") {
+@@ -178,6 +184,14 @@ if (pdf_bundle_freetype) {
+       "//third_party/freetype/src/src/base/ftmm.c",
+       "//third_party/freetype/src/src/base/ftsystem.c",
+       "//third_party/freetype/src/src/cff/cff.c",
++    ]
++
++    if (current_os == "wasm32") {
++      sources -= [ "//third_party/freetype/src/src/base/ftsystem.c" ]
++      sources += [ "//third_party/freetype/src/src/base/ftsystem_wasm.c" ]
++    }
++
++    sources += [
+       "//third_party/freetype/src/src/cff/cffobjs.h",
+       "//third_party/freetype/src/src/cid/type1cid.c",
+       "//third_party/freetype/src/src/psaux/psaux.c",
+@@ -276,6 +290,7 @@ source_set("fx_lcms2") {
+     # Must be after no_chromium_code for warning flags to be ordered correctly.
+     ":fx_lcms2_warnings",
+   ]
++  defines = []
+   sources = [
+     "lcms/include/lcms2.h",
+     "lcms/include/lcms2_plugin.h",
+@@ -306,6 +321,23 @@ source_set("fx_lcms2") {
+     "lcms/src/cmswtpnt.c",
+     "lcms/src/cmsxform.c",
+   ]
++
++  if (current_os == "wasm32") {
++    defines += [
++      "CMS_NO_PTHREADS=1",
++      "fopen=pdfium_wasm_lcms_fopen",
++      "fread=pdfium_wasm_lcms_fread",
++      "fwrite=pdfium_wasm_lcms_fwrite",
++      "fclose=pdfium_wasm_lcms_fclose",
++      "fseek=pdfium_wasm_lcms_fseek",
++      "ftell=pdfium_wasm_lcms_ftell",
++      "remove=pdfium_wasm_lcms_remove",
++      "time=pdfium_wasm_lcms_time",
++      "gmtime=pdfium_wasm_lcms_gmtime",
++      "ctime=pdfium_wasm_lcms_ctime",
++    ]
++    sources += [ "lcms/src/cms_wasm_stubs.c" ]
++  }
+   deps = [ "../core/fxcrt" ]
+ }
+ 
+@@ -395,6 +427,7 @@ config("fx_libopenjpeg_warnings") {
+ }
+ 
+ source_set("fx_libopenjpeg") {
++  defines = []
+   configs -= [ "//build/config/compiler:chromium_code" ]
+   configs += [
+     "//build/config/compiler:no_chromium_code",
+@@ -432,6 +465,22 @@ source_set("fx_libopenjpeg") {
+     "libopenjpeg/tgt.c",
+     "libopenjpeg/thread.c",
+   ]
++
++  if (current_os == "wasm32") {
++    defines += [
++      "fopen=pdfium_wasm_openjpeg_fopen",
++      "fread=pdfium_wasm_openjpeg_fread",
++      "fwrite=pdfium_wasm_openjpeg_fwrite",
++      "fclose=pdfium_wasm_openjpeg_fclose",
++      "fseek=pdfium_wasm_openjpeg_fseek",
++      "ftell=pdfium_wasm_openjpeg_ftell",
++      "fseeko=pdfium_wasm_openjpeg_fseeko",
++      "ftello=pdfium_wasm_openjpeg_ftello",
++      "getenv=pdfium_wasm_openjpeg_getenv",
++      "fprintf=pdfium_wasm_openjpeg_fprintf",
++    ]
++    sources += [ "libopenjpeg/openjpeg_wasm_stubs.c" ]
++  }
+   deps = [ "../core/fxcrt" ]
+ }
+ 
+diff --git a/core/fxcrt/cfx_fileaccess_wasm.cpp b/core/fxcrt/cfx_fileaccess_wasm.cpp
+new file mode 100644
+index 0000000..ef34dbc
+--- /dev/null
++++ b/core/fxcrt/cfx_fileaccess_wasm.cpp
+@@ -0,0 +1,56 @@
++// Copyright 2026 The PDFium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "core/fxcrt/fileaccess_iface.h"
++
++#include <memory>
++
++namespace {
++
++class CFX_FileAccess_Wasm final : public FileAccessIface {
++ public:
++  bool Open(ByteStringView fileName) override {
++    (void)fileName;
++    return false;
++  }
++
++  void Close() override {}
++  FX_FILESIZE GetSize() const override { return 0; }
++  FX_FILESIZE GetPosition() const override { return static_cast<FX_FILESIZE>(-1); }
++
++  FX_FILESIZE SetPosition(FX_FILESIZE pos) override {
++    (void)pos;
++    return static_cast<FX_FILESIZE>(-1);
++  }
++
++  size_t Read(pdfium::span<uint8_t> buffer) override {
++    (void)buffer;
++    return 0;
++  }
++
++  size_t Write(pdfium::span<const uint8_t> buffer) override {
++    (void)buffer;
++    return 0;
++  }
++
++  size_t ReadPos(pdfium::span<uint8_t> buffer, FX_FILESIZE pos) override {
++    (void)buffer;
++    (void)pos;
++    return 0;
++  }
++
++  bool Flush() override { return false; }
++
++  bool Truncate(FX_FILESIZE szFile) override {
++    (void)szFile;
++    return false;
++  }
++};
++
++}  // namespace
++
++// static
++std::unique_ptr<FileAccessIface> FileAccessIface::Create() {
++  return std::make_unique<CFX_FileAccess_Wasm>();
++}
+diff --git a/core/fxcrt/fx_folder_wasm.cpp b/core/fxcrt/fx_folder_wasm.cpp
+new file mode 100644
+index 0000000..3f31695
+--- /dev/null
++++ b/core/fxcrt/fx_folder_wasm.cpp
+@@ -0,0 +1,13 @@
++// Copyright 2026 The PDFium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "core/fxcrt/fx_folder.h"
++
++#include <memory>
++
++// static
++std::unique_ptr<FX_Folder> FX_Folder::OpenFolder(const ByteString& path) {
++  (void)path;
++  return nullptr;
++}
+diff --git a/core/fxcrt/fx_wasm_time_random.cpp b/core/fxcrt/fx_wasm_time_random.cpp
+new file mode 100644
+index 0000000..279b091
+--- /dev/null
++++ b/core/fxcrt/fx_wasm_time_random.cpp
+@@ -0,0 +1,43 @@
++// Copyright 2026 The PDFium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include <sys/time.h>
++#include <time.h>
++
++#undef getpid
++#undef gettimeofday
++#undef time
++#undef localtime
++
++extern "C" {
++
++int pdfium_wasm_fxcrt_getpid() {
++  return 1;
++}
++
++int pdfium_wasm_fxcrt_gettimeofday(struct timeval* tv, void* timezone) {
++  (void)timezone;
++  if (tv) {
++    tv->tv_sec = 0;
++    tv->tv_usec = 0;
++  }
++  return 0;
++}
++
++time_t pdfium_wasm_fxcrt_time(time_t* timer) {
++  if (timer) {
++    *timer = 0;
++  }
++  return 0;
++}
++
++struct tm* pdfium_wasm_fxcrt_localtime(const time_t* timer) {
++  static struct tm epoch;
++  (void)timer;
++  epoch.tm_year = 70;
++  epoch.tm_mday = 1;
++  return &epoch;
++}
++
++}  // extern "C"
+diff --git a/core/fxge/wasm/fx_wasm_impl.cpp b/core/fxge/wasm/fx_wasm_impl.cpp
+new file mode 100644
+index 0000000..9e2729b
+--- /dev/null
++++ b/core/fxge/wasm/fx_wasm_impl.cpp
+@@ -0,0 +1,75 @@
++// Copyright 2026 The PDFium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include <memory>
++
++#include "core/fxcrt/bytestring.h"
++#include "core/fxcrt/fx_codepage_forward.h"
++#include "core/fxge/cfx_gemodule.h"
++#include "core/fxge/systemfontinfo_iface.h"
++
++namespace {
++
++class CFX_WasmFontInfo final : public SystemFontInfoIface {
++ public:
++  void EnumFontList(CFX_FontMapper* pMapper) override { (void)pMapper; }
++
++  void* MapFont(int weight,
++                bool bItalic,
++                FX_Charset charset,
++                int pitch_family,
++                const ByteString& face) override {
++    (void)weight;
++    (void)bItalic;
++    (void)charset;
++    (void)pitch_family;
++    (void)face;
++    return nullptr;
++  }
++
++  void* GetFont(const ByteString& face) override {
++    (void)face;
++    return nullptr;
++  }
++
++  size_t GetFontData(void* hFont,
++                     uint32_t table,
++                     pdfium::span<uint8_t> buffer) override {
++    (void)hFont;
++    (void)table;
++    (void)buffer;
++    return 0;
++  }
++
++  bool GetFaceName(void* hFont, ByteString* name) override {
++    (void)hFont;
++    (void)name;
++    return false;
++  }
++
++  bool GetFontCharset(void* hFont, FX_Charset* charset) override {
++    (void)hFont;
++    (void)charset;
++    return false;
++  }
++
++  void DeleteFont(void* hFont) override { (void)hFont; }
++};
++
++class CWasmPlatform final : public CFX_GEModule::PlatformIface {
++ public:
++  void Init() override {}
++
++  std::unique_ptr<SystemFontInfoIface> CreateDefaultSystemFontInfo() override {
++    return std::make_unique<CFX_WasmFontInfo>();
++  }
++};
++
++}  // namespace
++
++// static
++std::unique_ptr<CFX_GEModule::PlatformIface>
++CFX_GEModule::PlatformIface::Create() {
++  return std::make_unique<CWasmPlatform>();
++}
+diff --git a/third_party/freetype/include/freetype-custom-config/ftstdlib-wasm.h b/third_party/freetype/include/freetype-custom-config/ftstdlib-wasm.h
+new file mode 100644
+index 0000000..c46cb9d
+--- /dev/null
++++ b/third_party/freetype/include/freetype-custom-config/ftstdlib-wasm.h
+@@ -0,0 +1,80 @@
++#ifndef FTSTDLIB_WASM_H_
++#define FTSTDLIB_WASM_H_
++
++#include <limits.h>
++#include <stdarg.h>
++#include <stddef.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#define ft_ptrdiff_t ptrdiff_t
++
++#define FT_CHAR_BIT CHAR_BIT
++#define FT_USHORT_MAX USHRT_MAX
++#define FT_INT_MAX INT_MAX
++#define FT_INT_MIN INT_MIN
++#define FT_UINT_MAX UINT_MAX
++#define FT_LONG_MIN LONG_MIN
++#define FT_LONG_MAX LONG_MAX
++#define FT_ULONG_MAX ULONG_MAX
++#ifdef LLONG_MAX
++#define FT_LLONG_MAX LLONG_MAX
++#endif
++#ifdef LLONG_MIN
++#define FT_LLONG_MIN LLONG_MIN
++#endif
++#ifdef ULLONG_MAX
++#define FT_ULLONG_MAX ULLONG_MAX
++#endif
++
++#define ft_memchr memchr
++#define ft_memcmp memcmp
++#define ft_memcpy memcpy
++#define ft_memmove memmove
++#define ft_memset memset
++#define ft_strcat strcat
++#define ft_strcmp strcmp
++#define ft_strcpy strcpy
++#define ft_strlen strlen
++#define ft_strncmp strncmp
++#define ft_strncpy strncpy
++#define ft_strrchr strrchr
++#define ft_strstr strstr
++
++#define FT_FILE FILE
++#define ft_fclose fclose
++#define ft_fopen fopen
++#define ft_fread fread
++#define ft_fseek fseek
++#define ft_ftell ftell
++#define ft_snprintf snprintf
++
++#define ft_qsort qsort
++
++#define ft_scalloc calloc
++#define ft_sfree free
++#define ft_smalloc malloc
++#define ft_srealloc realloc
++
++#define ft_strtol strtol
++
++static inline char* ft_wasm_getenv(const char* name) {
++  (void)name;
++  return NULL;
++}
++
++#define ft_getenv ft_wasm_getenv
++
++typedef int ft_jmp_buf[1];
++
++static inline void ft_wasm_longjmp(ft_jmp_buf buffer, int value) {
++  (void)buffer;
++  (void)value;
++  __builtin_trap();
++}
++
++#define ft_longjmp ft_wasm_longjmp
++#define ft_setjmp(buffer) 0
++
++#endif /* FTSTDLIB_WASM_H_ */
+diff --git a/third_party/lcms/src/cms_wasm_stubs.c b/third_party/lcms/src/cms_wasm_stubs.c
+new file mode 100644
+index 0000000..e4693bc
+--- /dev/null
++++ b/third_party/lcms/src/cms_wasm_stubs.c
+@@ -0,0 +1,84 @@
++#include <stddef.h>
++#include <stdio.h>
++#include <time.h>
++
++#undef fopen
++#undef fread
++#undef fwrite
++#undef fclose
++#undef fseek
++#undef ftell
++#undef remove
++#undef time
++#undef gmtime
++#undef ctime
++
++FILE* pdfium_wasm_lcms_fopen(const char* filename, const char* mode) {
++  (void)filename;
++  (void)mode;
++  return NULL;
++}
++
++size_t pdfium_wasm_lcms_fread(void* buffer,
++                              size_t size,
++                              size_t count,
++                              FILE* stream) {
++  (void)buffer;
++  (void)size;
++  (void)count;
++  (void)stream;
++  return 0;
++}
++
++size_t pdfium_wasm_lcms_fwrite(const void* buffer,
++                               size_t size,
++                               size_t count,
++                               FILE* stream) {
++  (void)buffer;
++  (void)size;
++  (void)count;
++  (void)stream;
++  return 0;
++}
++
++int pdfium_wasm_lcms_fclose(FILE* stream) {
++  (void)stream;
++  return 0;
++}
++
++int pdfium_wasm_lcms_fseek(FILE* stream, long offset, int origin) {
++  (void)stream;
++  (void)offset;
++  (void)origin;
++  return -1;
++}
++
++long pdfium_wasm_lcms_ftell(FILE* stream) {
++  (void)stream;
++  return -1L;
++}
++
++int pdfium_wasm_lcms_remove(const char* filename) {
++  (void)filename;
++  return -1;
++}
++
++time_t pdfium_wasm_lcms_time(time_t* timer) {
++  if (timer != NULL) {
++    *timer = 0;
++  }
++  return 0;
++}
++
++struct tm* pdfium_wasm_lcms_gmtime(const time_t* timer) {
++  static struct tm epoch;
++  (void)timer;
++  epoch.tm_year = 70;
++  epoch.tm_mday = 1;
++  return &epoch;
++}
++
++char* pdfium_wasm_lcms_ctime(const time_t* timer) {
++  (void)timer;
++  return "Thu Jan  1 00:00:00 1970\n";
++}
+diff --git a/third_party/libopenjpeg/openjpeg_wasm_stubs.c b/third_party/libopenjpeg/openjpeg_wasm_stubs.c
+new file mode 100644
+index 0000000..9fd8680
+--- /dev/null
++++ b/third_party/libopenjpeg/openjpeg_wasm_stubs.c
+@@ -0,0 +1,85 @@
++#include <stdarg.h>
++#include <stddef.h>
++#include <stdio.h>
++#include <sys/types.h>
++
++#undef fopen
++#undef fread
++#undef fwrite
++#undef fclose
++#undef fseek
++#undef ftell
++#undef fseeko
++#undef ftello
++#undef getenv
++#undef fprintf
++
++FILE* pdfium_wasm_openjpeg_fopen(const char* filename, const char* mode) {
++  (void)filename;
++  (void)mode;
++  return NULL;
++}
++
++size_t pdfium_wasm_openjpeg_fread(void* buffer,
++                                  size_t size,
++                                  size_t count,
++                                  FILE* stream) {
++  (void)buffer;
++  (void)size;
++  (void)count;
++  (void)stream;
++  return 0;
++}
++
++size_t pdfium_wasm_openjpeg_fwrite(const void* buffer,
++                                   size_t size,
++                                   size_t count,
++                                   FILE* stream) {
++  (void)buffer;
++  (void)size;
++  (void)count;
++  (void)stream;
++  return 0;
++}
++
++int pdfium_wasm_openjpeg_fclose(FILE* stream) {
++  (void)stream;
++  return 0;
++}
++
++int pdfium_wasm_openjpeg_fseek(FILE* stream, long offset, int whence) {
++  (void)stream;
++  (void)offset;
++  (void)whence;
++  return -1;
++}
++
++long pdfium_wasm_openjpeg_ftell(FILE* stream) {
++  (void)stream;
++  return -1L;
++}
++
++int pdfium_wasm_openjpeg_fseeko(FILE* stream, off_t offset, int whence) {
++  (void)stream;
++  (void)offset;
++  (void)whence;
++  return -1;
++}
++
++off_t pdfium_wasm_openjpeg_ftello(FILE* stream) {
++  (void)stream;
++  return -1;
++}
++
++char* pdfium_wasm_openjpeg_getenv(const char* name) {
++  (void)name;
++  return NULL;
++}
++
++int pdfium_wasm_openjpeg_fprintf(FILE* stream, const char* format, ...) {
++  va_list args;
++  (void)stream;
++  va_start(args, format);
++  va_end(args);
++  return 0;
++}

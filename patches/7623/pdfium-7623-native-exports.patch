@@ -1,0 +1,13 @@
+diff --git a/public/fpdfview.h b/public/fpdfview.h
+index d96556b..4d2b910 100644
+--- a/public/fpdfview.h
++++ b/public/fpdfview.h
+@@ -219,6 +219,8 @@ typedef int FPDF_OBJECT_TYPE;
+ #define FPDF_EXPORT
+ #endif  // defined(FPDF_IMPLEMENTATION)
+ #endif  // defined(WIN32)
++#elif defined(__APPLE__) && defined(FPDF_IMPLEMENTATION)
++#define FPDF_EXPORT __attribute__((visibility("default")))
+ #else
+ #define FPDF_EXPORT
+ #endif  // defined(COMPONENT_BUILD)

@@ -1,0 +1,165 @@
+--- a/third_party/libjpeg_turbo/src/jidctint.c
++++ b/third_party/libjpeg_turbo/src/jidctint.c
+@@ -55,6 +55,12 @@
+ #include "jpeglib.h"
+ #include "jdct.h"               /* Private declarations for DCT subsystem */
+ 
++#if defined(__wasm_simd128__) && BITS_IN_JSAMPLE == 8 && \
++    !defined(SHORTxSHORT_32) && !defined(SHORTxLCONST_32)
++#include <wasm_simd128.h>
++#define JPEG_WASM_ISLOW 1
++#endif
++
+ #ifdef DCT_ISLOW_SUPPORTED
+ 
+ 
+@@ -165,6 +171,129 @@
+ #define DEQUANTIZE(coef, quantval)  (((ISLOW_MULT_TYPE)(coef)) * (quantval))
+ 
+ 
++#ifdef JPEG_WASM_ISLOW
++
++static inline __attribute__((always_inline)) v128_t
++idct_mul(v128_t a, int constant)
++{
++  return wasm_i32x4_mul(a, wasm_i32x4_splat(constant));
++}
++
++static inline __attribute__((always_inline)) v128_t
++idct_descale(v128_t a, int shift)
++{
++  return wasm_i32x4_shr(wasm_i32x4_add(a, wasm_i32x4_splat(1 << (shift - 1))),
++                        shift);
++}
++
++/* Four independent 1-D transforms, using the scalar ISLOW constants. */
++static inline __attribute__((always_inline)) void
++idct_four(const v128_t in[8], v128_t out[8], int shift)
++{
++  v128_t z1 = idct_mul(wasm_i32x4_add(in[2], in[6]), FIX_0_541196100);
++  v128_t t2 = wasm_i32x4_add(z1, idct_mul(in[6], -FIX_1_847759065));
++  v128_t t3 = wasm_i32x4_add(z1, idct_mul(in[2], FIX_0_765366865));
++  v128_t t0 = wasm_i32x4_shl(wasm_i32x4_add(in[0], in[4]), CONST_BITS);
++  v128_t t1 = wasm_i32x4_shl(wasm_i32x4_sub(in[0], in[4]), CONST_BITS);
++  const v128_t e0 = wasm_i32x4_add(t0, t3);
++  const v128_t e3 = wasm_i32x4_sub(t0, t3);
++  const v128_t e1 = wasm_i32x4_add(t1, t2);
++  const v128_t e2 = wasm_i32x4_sub(t1, t2);
++
++  z1 = idct_mul(wasm_i32x4_add(in[7], in[1]), -FIX_0_899976223);
++  const v128_t z2 = idct_mul(wasm_i32x4_add(in[5], in[3]), -FIX_2_562915447);
++  v128_t z3 = wasm_i32x4_add(in[7], in[3]);
++  v128_t z4 = wasm_i32x4_add(in[5], in[1]);
++  const v128_t z5 = idct_mul(wasm_i32x4_add(z3, z4), FIX_1_175875602);
++  z3 = wasm_i32x4_add(idct_mul(z3, -FIX_1_961570560), z5);
++  z4 = wasm_i32x4_add(idct_mul(z4, -FIX_0_390180644), z5);
++  t0 = wasm_i32x4_add(idct_mul(in[7], FIX_0_298631336), wasm_i32x4_add(z1, z3));
++  t1 = wasm_i32x4_add(idct_mul(in[5], FIX_2_053119869), wasm_i32x4_add(z2, z4));
++  t2 = wasm_i32x4_add(idct_mul(in[3], FIX_3_072711026), wasm_i32x4_add(z2, z3));
++  t3 = wasm_i32x4_add(idct_mul(in[1], FIX_1_501321110), wasm_i32x4_add(z1, z4));
++
++  out[0] = idct_descale(wasm_i32x4_add(e0, t3), shift);
++  out[7] = idct_descale(wasm_i32x4_sub(e0, t3), shift);
++  out[1] = idct_descale(wasm_i32x4_add(e1, t2), shift);
++  out[6] = idct_descale(wasm_i32x4_sub(e1, t2), shift);
++  out[2] = idct_descale(wasm_i32x4_add(e2, t1), shift);
++  out[5] = idct_descale(wasm_i32x4_sub(e2, t1), shift);
++  out[3] = idct_descale(wasm_i32x4_add(e3, t0), shift);
++  out[4] = idct_descale(wasm_i32x4_sub(e3, t0), shift);
++}
++
++static inline __attribute__((always_inline)) void
++idct_transpose4(const v128_t in[4], v128_t out[4])
++{
++  const v128_t lo0 = wasm_i32x4_shuffle(in[0], in[1], 0, 4, 1, 5);
++  const v128_t hi0 = wasm_i32x4_shuffle(in[0], in[1], 2, 6, 3, 7);
++  const v128_t lo1 = wasm_i32x4_shuffle(in[2], in[3], 0, 4, 1, 5);
++  const v128_t hi1 = wasm_i32x4_shuffle(in[2], in[3], 2, 6, 3, 7);
++  out[0] = wasm_i32x4_shuffle(lo0, lo1, 0, 1, 4, 5);
++  out[1] = wasm_i32x4_shuffle(lo0, lo1, 2, 3, 6, 7);
++  out[2] = wasm_i32x4_shuffle(hi0, hi1, 0, 1, 4, 5);
++  out[3] = wasm_i32x4_shuffle(hi0, hi1, 2, 3, 6, 7);
++}
++
++/* The post-IDCT range table clamps the signed low ten bits plus 128. */
++static inline __attribute__((always_inline)) v128_t
++idct_store_range(v128_t row)
++{
++  return wasm_i32x4_add(wasm_i32x4_shr(wasm_i32x4_shl(row, 22), 22),
++                        wasm_i32x4_splat(128));
++}
++
++static void
++idct_wasm_8x8(JCOEFPTR coef, const ISLOW_MULT_TYPE *quant,
++             _JSAMPARRAY output, JDIMENSION output_col)
++{
++  const v128_t zero = wasm_i32x4_splat(0);
++  v128_t non_dc = wasm_v128_and(wasm_v128_load(coef),
++                               wasm_i16x8_make(0, -1, -1, -1, -1, -1, -1, -1));
++  for (int y = 1; y < 8; ++y)
++    non_dc = wasm_v128_or(non_dc, wasm_v128_load(coef + y * 8));
++
++  if (!wasm_v128_any_true(non_dc)) {
++    const v128_t dc = wasm_i32x4_splat(DEQUANTIZE(coef[0], quant[0]));
++    const v128_t sample = idct_store_range(
++        idct_descale(wasm_i32x4_shl(dc, PASS1_BITS), PASS1_BITS + 3));
++    const v128_t words = wasm_i16x8_narrow_i32x4(sample, sample);
++    const v128_t bytes = wasm_u8x16_narrow_i16x8(words, words);
++    for (int y = 0; y < 8; ++y)
++      wasm_v128_store64_lane(output[y] + output_col, bytes, 0);
++    return;
++  }
++
++  v128_t low[8], high[8];
++  for (int x = 0; x < 8; x += 4) {
++    v128_t cols[8];
++    for (int y = 0; y < 8; ++y) {
++      const int i = y * 8 + x;
++      const v128_t q = sizeof(ISLOW_MULT_TYPE) == 2
++                         ? wasm_i32x4_load16x4(quant + i)
++                         : wasm_v128_load(quant + i);
++      cols[y] = wasm_i32x4_mul(wasm_i32x4_load16x4(coef + i), q);
++    }
++    idct_four(cols, x == 0 ? low : high, CONST_BITS - PASS1_BITS);
++  }
++  for (int y = 0; y < 8; y += 4) {
++    v128_t rows[8], transformed[8], pixels[8];
++    idct_transpose4(low + y, rows);
++    idct_transpose4(high + y, rows + 4);
++    idct_four(rows, transformed, CONST_BITS + PASS1_BITS + 3);
++    idct_transpose4(transformed, pixels);
++    idct_transpose4(transformed + 4, pixels + 4);
++    for (int row = 0; row < 4; ++row) {
++      const v128_t words = wasm_i16x8_narrow_i32x4(
++          idct_store_range(pixels[row]), idct_store_range(pixels[row + 4]));
++      const v128_t bytes = wasm_u8x16_narrow_i16x8(words, zero);
++      wasm_v128_store64_lane(output[y + row] + output_col, bytes, 0);
++    }
++  }
++}
++
++#endif /* JPEG_WASM_ISLOW */
++
+ /*
+  * Perform dequantization and inverse DCT on one block of coefficients.
+  */
+@@ -174,6 +303,11 @@
+                  JCOEFPTR coef_block, _JSAMPARRAY output_buf,
+                  JDIMENSION output_col)
+ {
++#ifdef JPEG_WASM_ISLOW
++  (void)cinfo;
++  idct_wasm_8x8(coef_block, (ISLOW_MULT_TYPE *)compptr->dct_table,
++                output_buf, output_col);
++#else
+   JLONG tmp0, tmp1, tmp2, tmp3;
+   JLONG tmp10, tmp11, tmp12, tmp13;
+   JLONG z1, z2, z3, z4, z5;
+@@ -410,6 +544,7 @@
+ 
+     wsptr += DCTSIZE;           /* advance pointer to next row */
+   }
++#endif /* JPEG_WASM_ISLOW */
+ }
+ 
+ #ifdef IDCT_SCALING_SUPPORTED

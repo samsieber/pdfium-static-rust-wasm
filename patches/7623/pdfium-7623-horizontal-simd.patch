@@ -1,0 +1,140 @@
+--- a/core/fxge/dib/cstretchengine.cpp
++++ b/core/fxge/dib/cstretchengine.cpp
+@@ -9,6 +9,7 @@
+ #include <math.h>
+ 
+ #include <algorithm>
++#include <cstring>
+ #include <type_traits>
+ #include <utility>
+ 
+@@ -148,6 +149,87 @@
+       dest[offset] = CStretchEngine::PixelFromFixed(accum);
+     }
+   });
++  return true;
++}
++// Each output pixel has its own weights. Accumulate its B, G and R channels
++// in separate lanes with the same fixed-point math as the scalar loop.
++template <size_t Bpp, bool Indexed = false>
++bool StretchOpaqueHorizontalSimd(
++    pdfium::span<const uint8_t> src,
++    pdfium::span<uint8_t> dest,
++    int left,
++    int right,
++    const CStretchEngine::WeightTable& weight_table,
++    pdfium::span<const uint32_t> palette = {}) {
++  static_assert(Bpp == 3 || (Bpp == 4 && !Indexed));
++  constexpr size_t kSrcBpp = Indexed ? 1 : Bpp;
++  if (Indexed && palette.size() < 256) {
++    return false;
++  }
++  static_assert(CStretchEngine::kFixedPointBits == 16);
++  const int64_t width = static_cast<int64_t>(right) - left;
++  if (width <= 0 || static_cast<uint64_t>(width) > dest.size() / Bpp) {
++    return false;
++  }
++  const size_t source_pixels = src.size() / kSrcBpp;
++  size_t dest_offset = 0;
++  for (int col = left; col < right; ++col, dest_offset += Bpp) {
++    const CStretchEngine::PixelWeight* weights = weight_table.GetPixelWeight(col);
++    const int first = weights->src_start_;
++    const int last = weights->src_end_;
++    if (first < 0 || last < first || static_cast<size_t>(last) >= source_pixels) {
++      return false;
++    }
++
++#if defined(__wasm_simd128__)
++    v128_t accum = wasm_i32x4_splat(0);
++#else
++    uint32x4_t accum = vdupq_n_u32(0);
++#endif
++    // The span covers the first three bytes at every tap. The fourth byte
++    // contributes only to the discarded SIMD lane. Read three bytes for the
++    // final 24-bit source pixel if the scanline has no accessible padding.
++    UNSAFE_TODO({
++      const uint8_t* pixel = src.data() + static_cast<size_t>(first) * kSrcBpp;
++      for (int j = first; j <= last; ++j, pixel += kSrcBpp) {
++        uint32_t packed;
++        if constexpr (Indexed) {
++          packed = palette.data()[*pixel];
++        } else if (Bpp == 4 ||
++                   static_cast<size_t>(j) * Bpp + 3 < src.size()) {
++          std::memcpy(&packed, pixel, sizeof(packed));
++        } else {
++          packed = uint32_t{pixel[0]} | (uint32_t{pixel[1]} << 8) |
++                   (uint32_t{pixel[2]} << 16);
++        }
++        const uint32_t weight = weights->GetWeightForPosition(j);
++#if defined(__wasm_simd128__)
++        const v128_t bytes = wasm_i32x4_splat(static_cast<int32_t>(packed));
++        const v128_t channels = wasm_u32x4_extend_low_u16x8(
++            wasm_u16x8_extend_low_u8x16(bytes));
++        accum = wasm_i32x4_add(
++            accum, wasm_i32x4_mul(channels,
++                                wasm_i32x4_splat(static_cast<int32_t>(weight))));
++#else
++        const uint16x8_t words = vmovl_u8(vcreate_u8(packed));
++        const uint32x4_t channels = vmovl_u16(vget_low_u16(words));
++        accum = vmlaq_n_u32(accum, channels, weight);
++#endif
++      }
++#if defined(__wasm_simd128__)
++      const v128_t out = wasm_i8x16_shuffle(accum, accum,
++          2, 6, 10, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
++      const uint32_t packed = wasm_u32x4_extract_lane(out, 0);
++#else
++      const uint16x4_t shifted = vshrn_n_u32(accum, 16);
++      const uint8x8_t out = vmovn_u16(vcombine_u16(shifted, shifted));
++      const uint32_t packed = vget_lane_u32(vreinterpret_u32_u8(out), 0);
++#endif
++      dest[dest_offset] = static_cast<uint8_t>(packed);
++      dest[dest_offset + 1] = static_cast<uint8_t>(packed >> 8);
++      dest[dest_offset + 2] = static_cast<uint8_t>(packed >> 16);
++    });
++  }
+   return true;
+ }
+ #endif
+@@ -455,7 +537,8 @@
+       rows_to_go = kStrechPauseRows;
+     }
+ 
+-    const uint8_t* src_scan = source_->GetScanline(cur_row_).data();
++    const auto src = source_->GetScanline(cur_row_);
++    const uint8_t* src_scan = src.data();
+     pdfium::span<uint8_t> dest_span = inter_buf_.subspan(
+         (cur_row_ - src_clip_.top) * inter_pitch_, inter_pitch_);
+     size_t dest_span_index = 0;
+@@ -491,6 +574,14 @@
+         break;
+       }
+       case TransformMethod::k8BppToManyBpp: {
++#if defined(__wasm_simd128__) || (defined(__aarch64__) && defined(__ARM_NEON))
++        if (dest_format_ == FXDIB_Format::kBgr &&
++            StretchOpaqueHorizontalSimd<3, true>(
++                src, dest_span, dest_clip_.left, dest_clip_.right,
++                weight_table_, src_palette_)) {
++          break;
++        }
++#endif
+         for (int col = dest_clip_.left; col < dest_clip_.right; ++col) {
+           const PixelWeight* pWeights = weight_table_.GetPixelWeight(col);
+           uint32_t dest_r = 0;
+@@ -518,6 +609,16 @@
+         break;
+       }
+       case TransformMethod::kManyBpptoManyBpp: {
++#if defined(__wasm_simd128__) || (defined(__aarch64__) && defined(__ARM_NEON))
++        if ((Bpp == 3 && StretchOpaqueHorizontalSimd<3>(
++                             src, dest_span, dest_clip_.left, dest_clip_.right,
++                             weight_table_)) ||
++            (Bpp == 4 && StretchOpaqueHorizontalSimd<4>(
++                             src, dest_span, dest_clip_.left, dest_clip_.right,
++                             weight_table_))) {
++          break;
++        }
++#endif
+         for (int col = dest_clip_.left; col < dest_clip_.right; ++col) {
+           const PixelWeight* pWeights = weight_table_.GetPixelWeight(col);
+           uint32_t dest_r = 0;

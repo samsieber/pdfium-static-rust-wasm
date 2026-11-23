@@ -1,0 +1,610 @@
+diff --git a/absl/base/BUILD.gn b/absl/base/BUILD.gn
+index 022a7ba..ddcd59f 100644
+--- a/absl/base/BUILD.gn
++++ b/absl/base/BUILD.gn
+@@ -166,6 +166,14 @@ absl_source_set("base") {
+     "internal/spinlock.cc",
+     "internal/sysinfo.cc",
+     "internal/thread_identity.cc",
++  ]
++
++  if (current_os == "wasm32") {
++    sources -= [ "internal/sysinfo.cc" ]
++    sources += [ "internal/sysinfo_wasm.cc" ]
++  }
++
++  sources += [
+     "internal/unscaledcycleclock.cc",
+   ]
+   public = [
+diff --git a/absl/debugging/BUILD.gn b/absl/debugging/BUILD.gn
+index 4a2f5af..c783930 100644
+--- a/absl/debugging/BUILD.gn
++++ b/absl/debugging/BUILD.gn
+@@ -94,7 +94,12 @@ absl_source_set("symbolize") {
+ }
+ 
+ absl_source_set("examine_stack") {
+-  sources = [ "internal/examine_stack.cc" ]
++  sources = []
++  if (current_os == "wasm32") {
++    sources += [ "internal/examine_stack_wasm.cc" ]
++  } else {
++    sources += [ "internal/examine_stack.cc" ]
++  }
+   public = [ "internal/examine_stack.h" ]
+   visibility = [
+     ":*",
+@@ -110,7 +115,12 @@ absl_source_set("examine_stack") {
+ }
+ 
+ absl_source_set("failure_signal_handler") {
+-  sources = [ "failure_signal_handler.cc" ]
++  sources = []
++  if (current_os == "wasm32") {
++    sources += [ "failure_signal_handler_wasm.cc" ]
++  } else {
++    sources += [ "failure_signal_handler.cc" ]
++  }
+   public = [ "failure_signal_handler.h" ]
+   deps = [
+     ":examine_stack",
+diff --git a/absl/log/internal/BUILD.gn b/absl/log/internal/BUILD.gn
+index 0102f80..dbac3d8 100644
+--- a/absl/log/internal/BUILD.gn
++++ b/absl/log/internal/BUILD.gn
+@@ -75,6 +75,10 @@ absl_source_set("format") {
+ 
+ absl_source_set("globals") {
+   sources = [ "globals.cc" ]
++  if (current_os == "wasm32") {
++    defines = [ "fwrite=pdfium_wasm_absl_log_fwrite" ]
++    sources += [ "globals_wasm_stubs.cc" ]
++  }
+   public = [ "globals.h" ]
+   deps = [
+     "//third_party/abseil-cpp/absl/base:config",
+diff --git a/absl/random/internal/BUILD.gn b/absl/random/internal/BUILD.gn
+index 46dcff5..4f4bb49 100644
+--- a/absl/random/internal/BUILD.gn
++++ b/absl/random/internal/BUILD.gn
+@@ -37,7 +37,12 @@ absl_source_set("fast_uniform_bits") {
+ 
+ absl_source_set("seed_material") {
+   public = [ "seed_material.h" ]
+-  sources = [ "seed_material.cc" ]
++  sources = []
++  if (current_os == "wasm32") {
++    sources += [ "seed_material_wasm.cc" ]
++  } else {
++    sources += [ "seed_material.cc" ]
++  }
+   if (is_win) {
+     # TODO(mbonadei): In the bazel file this is -DEFAULTLIB:bcrypt.lib.
+     libs = [ "bcrypt.lib" ]
+@@ -233,6 +238,10 @@ absl_source_set("randen_hwaes_impl") {
+     "randen_hwaes.cc",
+     "randen_hwaes.h",
+   ]
++  if (current_os == "wasm32") {
++    defines = [ "fprintf=pdfium_wasm_absl_random_fprintf" ]
++    sources += [ "randen_hwaes_wasm_stubs.cc" ]
++  }
+   deps = [
+     ":platform",
+     "//third_party/abseil-cpp/absl/base:config",
+diff --git a/absl/strings/BUILD.gn b/absl/strings/BUILD.gn
+index fc06415..edd325a 100644
+--- a/absl/strings/BUILD.gn
++++ b/absl/strings/BUILD.gn
+@@ -166,6 +166,10 @@ absl_source_set("str_format_internal") {
+     "internal/str_format/output.cc",
+     "internal/str_format/parser.cc",
+   ]
++  if (current_os == "wasm32") {
++    defines = [ "fwrite=pdfium_wasm_absl_str_format_fwrite" ]
++    sources += [ "internal/str_format/output_wasm_stubs.cc" ]
++  }
+   public = [
+     "internal/str_format/arg.h",
+     "internal/str_format/bind.h",
+diff --git a/absl/synchronization/BUILD.gn b/absl/synchronization/BUILD.gn
+index 34274bc..cdc3ef2 100644
+--- a/absl/synchronization/BUILD.gn
++++ b/absl/synchronization/BUILD.gn
+@@ -56,6 +56,16 @@ absl_source_set("synchronization") {
+     "mutex.cc",
+     "notification.cc",
+   ]
++  if (current_os == "wasm32") {
++    defines = [
++      "pthread_cond_signal=pdfium_wasm_absl_pthread_cond_signal",
++      "pthread_cond_timedwait=pdfium_wasm_absl_pthread_cond_timedwait",
++      "pthread_cond_wait=pdfium_wasm_absl_pthread_cond_wait",
++      "pthread_mutex_lock=pdfium_wasm_absl_pthread_mutex_lock",
++      "pthread_mutex_unlock=pdfium_wasm_absl_pthread_mutex_unlock",
++    ]
++    sources += [ "internal/pthread_waiter_wasm_stubs.cc" ]
++  }
+   public = [
+     "barrier.h",
+     "blocking_counter.h",
+diff --git a/absl/time/internal/cctz/BUILD.gn b/absl/time/internal/cctz/BUILD.gn
+index 592c835..db657de 100644
+--- a/absl/time/internal/cctz/BUILD.gn
++++ b/absl/time/internal/cctz/BUILD.gn
+@@ -32,6 +32,23 @@ absl_source_set("time_zone") {
+     "src/tzfile.h",
+     "src/zone_info_source.cc",
+   ]
++
++  if (current_os == "wasm32") {
++    sources -= [
++      "src/time_zone_if.cc",
++      "src/time_zone_info.cc",
++      "src/time_zone_info.h",
++      "src/time_zone_libc.cc",
++      "src/time_zone_libc.h",
++      "src/time_zone_lookup.cc",
++      "src/tzfile.h",
++      "src/zone_info_source.cc",
++    ]
++    sources += [
++      "src/time_zone_if_wasm.cc",
++      "src/time_zone_lookup_wasm.cc",
++    ]
++  }
+   if (is_win) {
+     sources += [
+       "src/time_zone_name_win.cc",
+diff --git a/absl/base/internal/sysinfo_wasm.cc b/absl/base/internal/sysinfo_wasm.cc
+new file mode 100644
+index 0000000..d953d6f
+--- /dev/null
++++ b/absl/base/internal/sysinfo_wasm.cc
+@@ -0,0 +1,27 @@
++#include "absl/base/internal/sysinfo.h"
++
++#include "absl/base/config.h"
++
++namespace absl {
++ABSL_NAMESPACE_BEGIN
++namespace base_internal {
++
++int NumCPUs() {
++  return 1;
++}
++
++double NominalCPUFrequency() {
++  return 1.0;
++}
++
++pid_t GetTID() {
++  return 1;
++}
++
++pid_t GetCachedTID() {
++  return GetTID();
++}
++
++}  // namespace base_internal
++ABSL_NAMESPACE_END
++}  // namespace absl
+diff --git a/absl/debugging/failure_signal_handler_wasm.cc b/absl/debugging/failure_signal_handler_wasm.cc
+new file mode 100644
+index 0000000..47e9ea1
+--- /dev/null
++++ b/absl/debugging/failure_signal_handler_wasm.cc
+@@ -0,0 +1,20 @@
++#include "absl/debugging/failure_signal_handler.h"
++
++namespace absl {
++ABSL_NAMESPACE_BEGIN
++
++void InstallFailureSignalHandler(const FailureSignalHandlerOptions& options) {
++  (void)options;
++}
++
++namespace debugging_internal {
++
++const char* FailureSignalToString(int signo) {
++  (void)signo;
++  return "";
++}
++
++}  // namespace debugging_internal
++
++ABSL_NAMESPACE_END
++}  // namespace absl
+diff --git a/absl/debugging/internal/examine_stack_wasm.cc b/absl/debugging/internal/examine_stack_wasm.cc
+new file mode 100644
+index 0000000..91b0f65
+--- /dev/null
++++ b/absl/debugging/internal/examine_stack_wasm.cc
+@@ -0,0 +1,58 @@
++#include "absl/debugging/internal/examine_stack.h"
++
++#include "absl/base/attributes.h"
++
++namespace absl {
++ABSL_NAMESPACE_BEGIN
++namespace debugging_internal {
++
++namespace {
++ABSL_CONST_INIT SymbolizeUrlEmitter debug_stack_trace_hook = nullptr;
++}
++
++void RegisterDebugStackTraceHook(SymbolizeUrlEmitter hook) {
++  debug_stack_trace_hook = hook;
++}
++
++SymbolizeUrlEmitter GetDebugStackTraceHook() {
++  return debug_stack_trace_hook;
++}
++
++void* GetProgramCounter(void* const vuc) {
++  (void)vuc;
++  return nullptr;
++}
++
++void DumpPCAndFrameSizesAndStackTrace(void* const pc,
++                                      void* const stack[],
++                                      int frame_sizes[],
++                                      int depth,
++                                      int min_dropped_frames,
++                                      bool symbolize_stacktrace,
++                                      OutputWriter* writer,
++                                      void* writer_arg) {
++  (void)pc;
++  (void)stack;
++  (void)frame_sizes;
++  (void)depth;
++  (void)min_dropped_frames;
++  (void)symbolize_stacktrace;
++  (void)writer;
++  (void)writer_arg;
++}
++
++void DumpStackTrace(int min_dropped_frames,
++                    int max_num_frames,
++                    bool symbolize_stacktrace,
++                    OutputWriter* writer,
++                    void* writer_arg) {
++  (void)min_dropped_frames;
++  (void)max_num_frames;
++  (void)symbolize_stacktrace;
++  (void)writer;
++  (void)writer_arg;
++}
++
++}  // namespace debugging_internal
++ABSL_NAMESPACE_END
++}  // namespace absl
+diff --git a/absl/log/internal/globals_wasm_stubs.cc b/absl/log/internal/globals_wasm_stubs.cc
+new file mode 100644
+index 0000000..a96ae79
+--- /dev/null
++++ b/absl/log/internal/globals_wasm_stubs.cc
+@@ -0,0 +1,15 @@
++#include <cstddef>
++#include <cstdio>
++
++#undef fwrite
++
++extern "C" size_t pdfium_wasm_absl_log_fwrite(const void* ptr,
++                                               size_t size,
++                                               size_t count,
++                                               FILE* stream) {
++  (void)ptr;
++  (void)size;
++  (void)count;
++  (void)stream;
++  return 0;
++}
+diff --git a/absl/random/internal/randen_hwaes_wasm_stubs.cc b/absl/random/internal/randen_hwaes_wasm_stubs.cc
+new file mode 100644
+index 0000000..38066cc
+--- /dev/null
++++ b/absl/random/internal/randen_hwaes_wasm_stubs.cc
+@@ -0,0 +1,11 @@
++#include <cstdio>
++
++#undef fprintf
++
++extern "C" int pdfium_wasm_absl_random_fprintf(FILE* stream,
++                                                const char* format,
++                                                ...) {
++  (void)stream;
++  (void)format;
++  return 0;
++}
+diff --git a/absl/random/internal/seed_material_wasm.cc b/absl/random/internal/seed_material_wasm.cc
+new file mode 100644
+index 0000000..f01eb27
+--- /dev/null
++++ b/absl/random/internal/seed_material_wasm.cc
+@@ -0,0 +1,58 @@
++#include "absl/random/internal/seed_material.h"
++
++#include <cassert>
++#include <cstdint>
++
++#include "absl/base/config.h"
++#include "absl/types/optional.h"
++#include "absl/types/span.h"
++
++namespace absl {
++ABSL_NAMESPACE_BEGIN
++namespace random_internal {
++
++bool ReadSeedMaterialFromOSEntropy(absl::Span<uint32_t> values) {
++  assert(values.data() != nullptr);
++  if (values.data() == nullptr) {
++    return false;
++  }
++  return values.empty();
++}
++
++void MixIntoSeedMaterial(absl::Span<const uint32_t> sequence,
++                         absl::Span<uint32_t> seed_material) {
++  constexpr uint32_t kInitVal = 0x43b0d7e5;
++  constexpr uint32_t kHashMul = 0x931e8875;
++  constexpr uint32_t kMixMulL = 0xca01f9dd;
++  constexpr uint32_t kMixMulR = 0x4973f715;
++  constexpr uint32_t kShiftSize = sizeof(uint32_t) * 8 / 2;
++
++  uint32_t hash_const = kInitVal;
++  auto hash = [&](uint32_t value) {
++    value ^= hash_const;
++    hash_const *= kHashMul;
++    value *= hash_const;
++    value ^= value >> kShiftSize;
++    return value;
++  };
++
++  auto mix = [&](uint32_t x, uint32_t y) {
++    uint32_t result = kMixMulL * x - kMixMulR * y;
++    result ^= result >> kShiftSize;
++    return result;
++  };
++
++  for (const auto& seq_val : sequence) {
++    for (auto& elem : seed_material) {
++      elem = mix(elem, hash(seq_val));
++    }
++  }
++}
++
++absl::optional<uint32_t> GetSaltMaterial() {
++  return absl::nullopt;
++}
++
++}  // namespace random_internal
++ABSL_NAMESPACE_END
++}  // namespace absl
+diff --git a/absl/strings/internal/str_format/output_wasm_stubs.cc b/absl/strings/internal/str_format/output_wasm_stubs.cc
+new file mode 100644
+index 0000000..dd2e4f8
+--- /dev/null
++++ b/absl/strings/internal/str_format/output_wasm_stubs.cc
+@@ -0,0 +1,15 @@
++#include <cstddef>
++#include <cstdio>
++
++#undef fwrite
++
++extern "C" size_t pdfium_wasm_absl_str_format_fwrite(const void* ptr,
++                                                      size_t size,
++                                                      size_t count,
++                                                      FILE* stream) {
++  (void)ptr;
++  (void)size;
++  (void)count;
++  (void)stream;
++  return 0;
++}
+diff --git a/absl/synchronization/internal/pthread_waiter_wasm_stubs.cc b/absl/synchronization/internal/pthread_waiter_wasm_stubs.cc
+new file mode 100644
+index 0000000..fb4eeb1
+--- /dev/null
++++ b/absl/synchronization/internal/pthread_waiter_wasm_stubs.cc
+@@ -0,0 +1,41 @@
++#include <pthread.h>
++
++#include <cerrno>
++
++#undef pthread_cond_signal
++#undef pthread_cond_timedwait
++#undef pthread_cond_wait
++#undef pthread_mutex_lock
++#undef pthread_mutex_unlock
++
++extern "C" int pdfium_wasm_absl_pthread_cond_signal(pthread_cond_t* cond) {
++  (void)cond;
++  return 0;
++}
++
++extern "C" int pdfium_wasm_absl_pthread_cond_timedwait(
++    pthread_cond_t* cond,
++    pthread_mutex_t* mutex,
++    const struct timespec* abstime) {
++  (void)cond;
++  (void)mutex;
++  (void)abstime;
++  return ETIMEDOUT;
++}
++
++extern "C" int pdfium_wasm_absl_pthread_cond_wait(pthread_cond_t* cond,
++                                                  pthread_mutex_t* mutex) {
++  (void)cond;
++  (void)mutex;
++  return 0;
++}
++
++extern "C" int pdfium_wasm_absl_pthread_mutex_lock(pthread_mutex_t* mutex) {
++  (void)mutex;
++  return 0;
++}
++
++extern "C" int pdfium_wasm_absl_pthread_mutex_unlock(pthread_mutex_t* mutex) {
++  (void)mutex;
++  return 0;
++}
+diff --git a/absl/time/internal/cctz/src/time_zone_if_wasm.cc b/absl/time/internal/cctz/src/time_zone_if_wasm.cc
+new file mode 100644
+index 0000000..b083121
+--- /dev/null
++++ b/absl/time/internal/cctz/src/time_zone_if_wasm.cc
+@@ -0,0 +1,77 @@
++#include "absl/time/internal/cctz/src/time_zone_if.h"
++
++#include <memory>
++#include <string>
++
++#include "absl/base/config.h"
++#include "absl/time/internal/cctz/src/time_zone_fixed.h"
++
++namespace absl {
++ABSL_NAMESPACE_BEGIN
++namespace time_internal {
++namespace cctz {
++
++namespace {
++
++class WasmFixedTimeZone : public TimeZoneIf {
++ public:
++  explicit WasmFixedTimeZone(seconds offset)
++      : offset_(offset), name_(FixedOffsetToName(offset)),
++        abbr_(FixedOffsetToAbbr(offset)) {}
++
++  time_zone::absolute_lookup BreakTime(
++      const time_point<seconds>& tp) const override {
++    const auto shifted = civil_second() + ToUnixSeconds(tp) + offset_.count();
++    return {shifted, static_cast<int>(offset_.count()), false, abbr_.c_str()};
++  }
++
++  time_zone::civil_lookup MakeTime(const civil_second& cs) const override {
++    const time_point<seconds> tp =
++        FromUnixSeconds(cs - civil_second() - offset_.count());
++    return {time_zone::civil_lookup::UNIQUE, tp, tp, tp};
++  }
++
++  bool NextTransition(const time_point<seconds>&,
++                      time_zone::civil_transition*) const override {
++    return false;
++  }
++
++  bool PrevTransition(const time_point<seconds>&,
++                      time_zone::civil_transition*) const override {
++    return false;
++  }
++
++  std::string Version() const override {
++    return std::string();
++  }
++
++  std::string Description() const override {
++    return name_;
++  }
++
++ private:
++  seconds offset_;
++  std::string name_;
++  std::string abbr_;
++};
++
++}  // namespace
++
++std::unique_ptr<TimeZoneIf> TimeZoneIf::UTC() {
++  return std::unique_ptr<TimeZoneIf>(new WasmFixedTimeZone(seconds::zero()));
++}
++
++std::unique_ptr<TimeZoneIf> TimeZoneIf::Make(const std::string& name) {
++  seconds offset;
++  if (FixedOffsetFromName(name, &offset)) {
++    return std::unique_ptr<TimeZoneIf>(new WasmFixedTimeZone(offset));
++  }
++  return nullptr;
++}
++
++TimeZoneIf::~TimeZoneIf() {}
++
++}  // namespace cctz
++}  // namespace time_internal
++ABSL_NAMESPACE_END
++}  // namespace absl
+diff --git a/absl/time/internal/cctz/src/time_zone_lookup_wasm.cc b/absl/time/internal/cctz/src/time_zone_lookup_wasm.cc
+new file mode 100644
+index 0000000..c31a299
+--- /dev/null
++++ b/absl/time/internal/cctz/src/time_zone_lookup_wasm.cc
+@@ -0,0 +1,69 @@
++#include "absl/time/internal/cctz/include/cctz/time_zone.h"
++
++#include <string>
++
++#include "absl/base/config.h"
++#include "absl/time/internal/cctz/src/time_zone_fixed.h"
++#include "absl/time/internal/cctz/src/time_zone_impl.h"
++
++namespace absl {
++ABSL_NAMESPACE_BEGIN
++namespace time_internal {
++namespace cctz {
++
++std::string time_zone::name() const { return effective_impl().Name(); }
++
++time_zone::absolute_lookup time_zone::lookup(
++    const time_point<seconds>& tp) const {
++  return effective_impl().BreakTime(tp);
++}
++
++time_zone::civil_lookup time_zone::lookup(const civil_second& cs) const {
++  return effective_impl().MakeTime(cs);
++}
++
++bool time_zone::next_transition(const time_point<seconds>& tp,
++                                civil_transition* trans) const {
++  return effective_impl().NextTransition(tp, trans);
++}
++
++bool time_zone::prev_transition(const time_point<seconds>& tp,
++                                civil_transition* trans) const {
++  return effective_impl().PrevTransition(tp, trans);
++}
++
++std::string time_zone::version() const { return effective_impl().Version(); }
++
++std::string time_zone::description() const {
++  return effective_impl().Description();
++}
++
++const time_zone::Impl& time_zone::effective_impl() const {
++  if (impl_ == nullptr) {
++    return *time_zone::Impl::UTC().impl_;
++  }
++  return *impl_;
++}
++
++bool load_time_zone(const std::string& name, time_zone* tz) {
++  return time_zone::Impl::LoadTimeZone(name, tz);
++}
++
++time_zone utc_time_zone() {
++  return time_zone::Impl::UTC();
++}
++
++time_zone fixed_time_zone(const seconds& offset) {
++  time_zone tz;
++  load_time_zone(FixedOffsetToName(offset), &tz);
++  return tz;
++}
++
++time_zone local_time_zone() {
++  return utc_time_zone();
++}
++
++}  // namespace cctz
++}  // namespace time_internal
++ABSL_NAMESPACE_END
++}  // namespace absl

@@ -1,0 +1,117 @@
+diff --git a/BUILD.gn b/BUILD.gn
+index dad5959..cf63db0 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -171,6 +171,23 @@ config("icu_code") {
+     # double-conversion-utils.h doesn't know how to operate.
+     defines += [ "__i386__" ]
+   }
++
++  if (current_os == "wasm32") {
++    defines += [
++      "U_HAVE_TZSET=0",
++      "U_HAVE_TIMEZONE=0",
++      "U_HAVE_TZNAME=0",
++      "U_HAVE_MMAP=0",
++      "getenv=pdfium_wasm_icu_getenv",
++      "gettimeofday=pdfium_wasm_icu_gettimeofday",
++      "time=pdfium_wasm_icu_time",
++      "fopen=pdfium_wasm_icu_fopen",
++      "fread=pdfium_wasm_icu_fread",
++      "fclose=pdfium_wasm_icu_fclose",
++      "fseek=pdfium_wasm_icu_fseek",
++      "ftell=pdfium_wasm_icu_ftell",
++    ]
++  }
+ }
+ 
+ # Config used to set default visibility to hidden.
+@@ -367,6 +384,10 @@ template("generate_icuuc") {
+       sources += [ "source/stubdata/stubdata.cpp" ]
+     }
+ 
++    if (current_os == "wasm32") {
++      sources += [ "source/common/icu_wasm_stubs.cpp" ]
++    }
++
+     defines += [ "U_ICUDATAENTRY_IN_COMMON" ]
+ 
+     # TODO(fxbug.dev/42180987): workaround for toolchain issues, see bug
+diff --git a/source/common/icu_wasm_stubs.cpp b/source/common/icu_wasm_stubs.cpp
+new file mode 100644
+index 0000000..6826844
+--- /dev/null
++++ b/source/common/icu_wasm_stubs.cpp
+@@ -0,0 +1,72 @@
++#include <stddef.h>
++#include <stdio.h>
++#include <sys/time.h>
++#include <time.h>
++
++#undef getenv
++#undef gettimeofday
++#undef time
++#undef fopen
++#undef fread
++#undef fclose
++#undef fseek
++#undef ftell
++
++extern "C" {
++
++char* pdfium_wasm_icu_getenv(const char* name) {
++  (void)name;
++  return nullptr;
++}
++
++int pdfium_wasm_icu_gettimeofday(struct timeval* tv, void* timezone) {
++  (void)timezone;
++  if (tv != nullptr) {
++    tv->tv_sec = 0;
++    tv->tv_usec = 0;
++  }
++  return 0;
++}
++
++time_t pdfium_wasm_icu_time(time_t* timer) {
++  if (timer != nullptr) {
++    *timer = 0;
++  }
++  return 0;
++}
++
++FILE* pdfium_wasm_icu_fopen(const char* filename, const char* mode) {
++  (void)filename;
++  (void)mode;
++  return nullptr;
++}
++
++size_t pdfium_wasm_icu_fread(void* buffer,
++                             size_t size,
++                             size_t count,
++                             FILE* stream) {
++  (void)buffer;
++  (void)size;
++  (void)count;
++  (void)stream;
++  return 0;
++}
++
++int pdfium_wasm_icu_fclose(FILE* stream) {
++  (void)stream;
++  return 0;
++}
++
++int pdfium_wasm_icu_fseek(FILE* stream, long offset, int origin) {
++  (void)stream;
++  (void)offset;
++  (void)origin;
++  return -1;
++}
++
++long pdfium_wasm_icu_ftell(FILE* stream) {
++  (void)stream;
++  return -1L;
++}
++
++}  // extern "C"

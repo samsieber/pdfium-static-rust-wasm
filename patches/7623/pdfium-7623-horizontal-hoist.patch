@@ -1,0 +1,189 @@
+--- a/core/fxge/dib/cstretchengine.cpp
++++ b/core/fxge/dib/cstretchengine.cpp
+@@ -151,8 +151,69 @@
+   });
+   return true;
+ }
+-// Each output pixel has its own weights. Accumulate its B, G and R channels
+-// in separate lanes with the same fixed-point math as the scalar loop.
++#if defined(__wasm_simd128__)
++using HorizontalAccum = v128_t;
++
++HorizontalAccum ZeroHorizontalAccum() {
++  return wasm_i32x4_splat(0);
++}
++
++HorizontalAccum AccumulateHorizontal(HorizontalAccum accum,
++                                     uint32_t packed,
++                                     uint32_t weight) {
++  const v128_t bytes = wasm_i32x4_splat(static_cast<int32_t>(packed));
++  const v128_t channels = wasm_u32x4_extend_low_u16x8(
++      wasm_u16x8_extend_low_u8x16(bytes));
++  return wasm_i32x4_add(
++      accum, wasm_i32x4_mul(channels,
++                          wasm_i32x4_splat(static_cast<int32_t>(weight))));
++}
++
++uint32_t PackHorizontal(HorizontalAccum accum) {
++  const v128_t out = wasm_i8x16_shuffle(
++      accum, accum, 2, 6, 10, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
++  return wasm_u32x4_extract_lane(out, 0);
++}
++#else
++using HorizontalAccum = uint32x4_t;
++
++HorizontalAccum ZeroHorizontalAccum() {
++  return vdupq_n_u32(0);
++}
++
++HorizontalAccum AccumulateHorizontal(HorizontalAccum accum,
++                                     uint32_t packed,
++                                     uint32_t weight) {
++  const uint16x8_t words = vmovl_u8(vcreate_u8(packed));
++  const uint32x4_t channels = vmovl_u16(vget_low_u16(words));
++  return vmlaq_n_u32(accum, channels, weight);
++}
++
++uint32_t PackHorizontal(HorizontalAccum accum) {
++  const uint16x4_t shifted = vshrn_n_u32(accum, 16);
++  const uint8x8_t out = vmovn_u16(vcombine_u16(shifted, shifted));
++  return vget_lane_u32(vreinterpret_u32_u8(out), 0);
++}
++#endif
++
++// Keep the generic tap loop out of the one- and two-tap interpolation path.
++[[clang::noinline]] uint32_t StretchIndexedHorizontalManyTaps(
++    const uint8_t* pixel,
++    const uint32_t* palette,
++    const uint32_t* tap_weights,
++    size_t tap_count) {
++  HorizontalAccum accum = ZeroHorizontalAccum();
++  // The caller validated the input range and the palette once.
++  UNSAFE_TODO({
++    for (size_t tap = 0; tap < tap_count; ++tap) {
++      accum = AccumulateHorizontal(accum, palette[pixel[tap]], tap_weights[tap]);
++    }
++  });
++  return PackHorizontal(accum);
++}
++
++// Each output column has its own weights, so accumulate B, G and R in
++// separate lanes for one output pixel at a time.
+ template <size_t Bpp, bool Indexed = false>
+ bool StretchOpaqueHorizontalSimd(
+     pdfium::span<const uint8_t> src,
+@@ -162,18 +223,19 @@
+     const CStretchEngine::WeightTable& weight_table,
+     pdfium::span<const uint32_t> palette = {}) {
+   static_assert(Bpp == 3 || (Bpp == 4 && !Indexed));
++  static_assert(CStretchEngine::kFixedPointBits == 16);
+   constexpr size_t kSrcBpp = Indexed ? 1 : Bpp;
+   if (Indexed && palette.size() < 256) {
+     return false;
+   }
+-  static_assert(CStretchEngine::kFixedPointBits == 16);
+   const int64_t width = static_cast<int64_t>(right) - left;
+   if (width <= 0 || static_cast<uint64_t>(width) > dest.size() / Bpp) {
+     return false;
+   }
++
+   const size_t source_pixels = src.size() / kSrcBpp;
+-  size_t dest_offset = 0;
+-  for (int col = left; col < right; ++col, dest_offset += Bpp) {
++  uint8_t* output = dest.data();
++  for (int col = left; col < right; ++col) {
+     const CStretchEngine::PixelWeight* weights = weight_table.GetPixelWeight(col);
+     const int first = weights->src_start_;
+     const int last = weights->src_end_;
+@@ -181,53 +243,47 @@
+       return false;
+     }
+ 
+-#if defined(__wasm_simd128__)
+-    v128_t accum = wasm_i32x4_splat(0);
+-#else
+-    uint32x4_t accum = vdupq_n_u32(0);
+-#endif
+-    // The span covers the first three bytes at every tap. The fourth byte
+-    // contributes only to the discarded SIMD lane. Read three bytes for the
+-    // final 24-bit source pixel if the scanline has no accessible padding.
++    // The row-length check covers all stores, and WeightTable stores one
++    // coefficient for each position in the inclusive tap range.
+     UNSAFE_TODO({
+       const uint8_t* pixel = src.data() + static_cast<size_t>(first) * kSrcBpp;
+-      for (int j = first; j <= last; ++j, pixel += kSrcBpp) {
+-        uint32_t packed;
+-        if constexpr (Indexed) {
+-          packed = palette.data()[*pixel];
+-        } else if (Bpp == 4 ||
+-                   static_cast<size_t>(j) * Bpp + 3 < src.size()) {
+-          std::memcpy(&packed, pixel, sizeof(packed));
++      const uint32_t* tap_weights = weights->weights_;
++      const size_t tap_count = static_cast<size_t>(last - first) + 1;
++      uint32_t result;
++      if constexpr (Indexed) {
++        const uint32_t* colors = palette.data();
++        if (tap_count > 2) {
++          result = StretchIndexedHorizontalManyTaps(pixel, colors, tap_weights,
++                                                   tap_count);
+         } else {
+-          packed = uint32_t{pixel[0]} | (uint32_t{pixel[1]} << 8) |
+-                   (uint32_t{pixel[2]} << 16);
+-        }
+-        const uint32_t weight = weights->GetWeightForPosition(j);
+-#if defined(__wasm_simd128__)
+-        const v128_t bytes = wasm_i32x4_splat(static_cast<int32_t>(packed));
+-        const v128_t channels = wasm_u32x4_extend_low_u16x8(
+-            wasm_u16x8_extend_low_u8x16(bytes));
+-        accum = wasm_i32x4_add(
+-            accum, wasm_i32x4_mul(channels,
+-                                wasm_i32x4_splat(static_cast<int32_t>(weight))));
+-#else
+-        const uint16x8_t words = vmovl_u8(vcreate_u8(packed));
+-        const uint32x4_t channels = vmovl_u16(vget_low_u16(words));
+-        accum = vmlaq_n_u32(accum, channels, weight);
+-#endif
+-      }
+-#if defined(__wasm_simd128__)
+-      const v128_t out = wasm_i8x16_shuffle(accum, accum,
+-          2, 6, 10, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+-      const uint32_t packed = wasm_u32x4_extract_lane(out, 0);
+-#else
+-      const uint16x4_t shifted = vshrn_n_u32(accum, 16);
+-      const uint8x8_t out = vmovn_u16(vcombine_u16(shifted, shifted));
+-      const uint32_t packed = vget_lane_u32(vreinterpret_u32_u8(out), 0);
+-#endif
+-      dest[dest_offset] = static_cast<uint8_t>(packed);
+-      dest[dest_offset + 1] = static_cast<uint8_t>(packed >> 8);
+-      dest[dest_offset + 2] = static_cast<uint8_t>(packed >> 16);
++          HorizontalAccum accum = AccumulateHorizontal(
++              ZeroHorizontalAccum(), colors[pixel[0]], tap_weights[0]);
++          if (tap_count == 2) {
++            accum = AccumulateHorizontal(accum, colors[pixel[1]], tap_weights[1]);
++          }
++          result = PackHorizontal(accum);
++        }
++      } else {
++        HorizontalAccum accum = ZeroHorizontalAccum();
++        for (size_t tap = 0; tap < tap_count; ++tap, pixel += kSrcBpp) {
++          uint32_t packed;
++          // The fourth lane is discarded. A packed scanline may have no
++          // accessible padding after its last three-byte pixel.
++          if (Bpp == 4 ||
++              (static_cast<size_t>(first) + tap) * Bpp + 3 < src.size()) {
++            std::memcpy(&packed, pixel, sizeof(packed));
++          } else {
++            packed = uint32_t{pixel[0]} | (uint32_t{pixel[1]} << 8) |
++                     (uint32_t{pixel[2]} << 16);
++          }
++          accum = AccumulateHorizontal(accum, packed, tap_weights[tap]);
++        }
++        result = PackHorizontal(accum);
++      }
++      output[0] = static_cast<uint8_t>(result);
++      output[1] = static_cast<uint8_t>(result >> 8);
++      output[2] = static_cast<uint8_t>(result >> 16);
++      output += Bpp;
+     });
+   }
+   return true;

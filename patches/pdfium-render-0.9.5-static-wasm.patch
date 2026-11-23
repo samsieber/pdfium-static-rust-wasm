@@ -1,0 +1,189 @@
+diff --git a/src/bindings.rs b/src/bindings.rs
+index 63cf877..77e7e90 100644
+--- a/src/bindings.rs
++++ b/src/bindings.rs
+@@ -22,10 +22,10 @@
+ #[cfg(not(feature = "static"))]
+ pub(crate) mod dynamic_bindings;
+ 
+-#[cfg(not(target_arch = "wasm32"))]
+ #[cfg(feature = "static")]
+ pub(crate) mod static_bindings;
+ 
++#[cfg(not(feature = "static"))]
+ #[cfg(target_arch = "wasm32")]
+ pub(crate) mod wasm_bindings;
+ 
+@@ -141,7 +141,7 @@ use std::ffi::CString;
+ /// Pdfium reports both as `c_int`, so `stride * height` is an `i32` product and a bitmap over
+ /// `i32::MAX` bytes wraps before anything widens the result. Multiplying in `usize` avoids that;
+ /// a non-positive stride or height is Pdfium's error or empty-bitmap signal and yields zero.
+-#[cfg(not(target_arch = "wasm32"))]
++#[cfg(any(not(target_arch = "wasm32"), feature = "static"))]
+ fn bitmap_buffer_len(stride: std::os::raw::c_int, height: std::os::raw::c_int) -> usize {
+     if stride <= 0 || height <= 0 {
+         return 0;
+@@ -374,7 +374,7 @@ pub trait PdfiumLibraryBindings: Send + Sync {
+     #[allow(non_snake_case)]
+     unsafe fn FPDF_SetSandBoxPolicy(&self, policy: FPDF_DWORD, enable: FPDF_BOOL);
+ 
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(any(not(target_arch = "wasm32"), feature = "static"))]
+     #[cfg(feature = "pdfium_use_win32")]
+     /// Sets printing mode when printing on Windows.
+     ///
+@@ -454,7 +454,7 @@ pub trait PdfiumLibraryBindings: Send + Sync {
+     #[allow(non_snake_case)]
+     unsafe fn FPDF_CreateNewDocument(&self) -> FPDF_DOCUMENT;
+ 
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(any(not(target_arch = "wasm32"), feature = "static"))]
+     /// Opens and loads an existing PDF document.
+     ///
+     ///    `file_path` -  Path to the PDF file (including extension).
+@@ -3203,7 +3203,7 @@ pub trait PdfiumLibraryBindings: Send + Sync {
+         color: FPDF_DWORD,
+     ) -> FPDF_BOOL;
+ 
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(any(not(target_arch = "wasm32"), feature = "static"))]
+     /// Note that this function is not available when compiling to WASM as it cannot be made
+     /// memory safe. When compiling to WASM, Pdfium's internal pixel data buffer for a bitmap
+     /// resides in a separate WASM memory module from your Rust application, so any buffer
+@@ -3235,7 +3235,7 @@ pub trait PdfiumLibraryBindings: Send + Sync {
+     #[allow(non_snake_case)]
+     unsafe fn FPDFBitmap_GetBuffer(&self, bitmap: FPDF_BITMAP) -> *mut c_void;
+ 
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(any(not(target_arch = "wasm32"), feature = "static"))]
+     /// This function is not part of the Pdfium API. It is provided by `pdfium-render` as an
+     /// alternative to directly mutating the data returned by
+     /// [PdfiumLibraryBindings::FPDFBitmap_GetBuffer].
+@@ -3265,7 +3265,7 @@ pub trait PdfiumLibraryBindings: Send + Sync {
+         true
+     }
+ 
+-    #[cfg(target_arch = "wasm32")]
++    #[cfg(all(target_arch = "wasm32", not(feature = "static")))]
+     /// This function is not part of the Pdfium API. It is provided by `pdfium-render` as an
+     /// alternative to directly mutating the data returned by
+     /// [PdfiumLibraryBindings::FPDFBitmap_GetBuffer].
+@@ -3277,7 +3277,7 @@ pub trait PdfiumLibraryBindings: Send + Sync {
+     #[allow(non_snake_case)]
+     unsafe fn FPDFBitmap_SetBuffer(&self, bitmap: FPDF_BITMAP, buffer: &[u8]) -> bool;
+ 
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(any(not(target_arch = "wasm32"), feature = "static"))]
+     /// Gets the data buffer of a bitmap as a Rust slice.
+     ///
+     ///   `bitmap`      -   Handle to the bitmap. Returned by [PdfiumLibraryBindings::FPDFBitmap_Create]
+@@ -3304,7 +3304,7 @@ pub trait PdfiumLibraryBindings: Send + Sync {
+         unsafe { std::slice::from_raw_parts(buffer as *const u8, len) }
+     }
+ 
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(any(not(target_arch = "wasm32"), feature = "static"))]
+     /// This function is not part of the Pdfium API. It is provided by `pdfium-render` as a
+     /// cross-platform neutral way of retrieving the pixel data owned by a bitmap. It is
+     /// an alternative to Pdfium's [PdfiumLibraryBindings::FPDFBitmap_GetBuffer] function,
+@@ -3336,7 +3336,7 @@ pub trait PdfiumLibraryBindings: Send + Sync {
+         Vec::from(self.FPDFBitmap_GetBuffer_as_slice(bitmap))
+     }
+ 
+-    #[cfg(target_arch = "wasm32")]
++    #[cfg(all(target_arch = "wasm32", not(feature = "static")))]
+     /// Gets the data buffer of a bitmap.
+     ///
+     ///   `bitmap`      -   Handle to the bitmap. Returned by [PdfiumLibraryBindings::FPDFBitmap_Create]
+diff --git a/src/bindings/static_bindings.rs b/src/bindings/static_bindings.rs
+index 0a06d15..d2d949a 100644
+--- a/src/bindings/static_bindings.rs
++++ b/src/bindings/static_bindings.rs
+@@ -1746,6 +1746,13 @@ impl PdfiumLibraryBindings for StaticPdfiumBindings {
+         crate::bindgen::FPDFBitmap_GetBuffer(bitmap)
+     }
+ 
++    #[cfg(target_arch = "wasm32")]
++    #[inline]
++    #[allow(non_snake_case)]
++    unsafe fn FPDFBitmap_GetBuffer_as_array(&self, bitmap: FPDF_BITMAP) -> js_sys::Uint8Array {
++        js_sys::Uint8Array::view(self.FPDFBitmap_GetBuffer_as_slice(bitmap))
++    }
++
+     #[inline]
+     #[allow(non_snake_case)]
+     unsafe fn FPDFBitmap_GetWidth(&self, bitmap: FPDF_BITMAP) -> c_int {
+diff --git a/src/bindings/thread_safe.rs b/src/bindings/thread_safe.rs
+index 3267692..2151a96 100644
+--- a/src/bindings/thread_safe.rs
++++ b/src/bindings/thread_safe.rs
+@@ -167,7 +167,7 @@ impl<T: PdfiumLibraryBindings> PdfiumLibraryBindings for ThreadSafePdfiumBinding
+         self.bindings.FPDF_CreateNewDocument()
+     }
+ 
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(any(not(target_arch = "wasm32"), feature = "static"))]
+     #[inline]
+     #[allow(non_snake_case)]
+     unsafe fn FPDF_LoadDocument(&self, file_path: &str, password: Option<&str>) -> FPDF_DOCUMENT {
+@@ -1935,7 +1935,7 @@ impl<T: PdfiumLibraryBindings> PdfiumLibraryBindings for ThreadSafePdfiumBinding
+ 
+     #[inline]
+     #[allow(non_snake_case)]
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(any(not(target_arch = "wasm32"), feature = "static"))]
+     unsafe fn FPDFBitmap_GetBuffer(&self, bitmap: FPDF_BITMAP) -> *mut c_void {
+         let _lock = PdfiumThreadMarshall::lock();
+         self.bindings.FPDFBitmap_GetBuffer(bitmap)
+diff --git a/src/pdfium.rs b/src/pdfium.rs
+index 3404d2e..2a7c84a 100644
+--- a/src/pdfium.rs
++++ b/src/pdfium.rs
+@@ -19,7 +19,7 @@ use {
+     std::ffi::OsString, std::path::PathBuf,
+ };
+ 
+-#[cfg(all(not(target_arch = "wasm32"), feature = "static"))]
++#[cfg(feature = "static")]
+ use crate::bindings::static_bindings::StaticPdfiumBindings;
+ 
+ #[cfg(not(target_arch = "wasm32"))]
+@@ -31,9 +31,11 @@ use {
+     std::path::Path,
+ };
+ 
++#[cfg(all(target_arch = "wasm32", not(feature = "static")))]
++use crate::bindings::wasm_bindings::{PdfiumRenderWasmState, WasmPdfiumBindings};
++
+ #[cfg(target_arch = "wasm32")]
+ use {
+-    crate::bindings::wasm_bindings::{PdfiumRenderWasmState, WasmPdfiumBindings},
+     js_sys::{ArrayBuffer, Uint8Array},
+     wasm_bindgen::JsCast,
+     wasm_bindgen_futures::JsFuture,
+@@ -93,7 +95,6 @@ pub struct Pdfium {
+ }
+ 
+ impl Pdfium {
+-    #[cfg(not(target_arch = "wasm32"))]
+     #[cfg(any(doc, feature = "static"))]
+     /// Binds to a Pdfium library that was statically linked into the currently running
+     /// executable, returning a new [PdfiumLibraryBindings] object that contains bindings to the
+@@ -138,7 +139,7 @@ impl Pdfium {
+         }
+     }
+ 
+-    #[cfg(target_arch = "wasm32")]
++    #[cfg(all(target_arch = "wasm32", not(feature = "static")))]
+     /// Initializes the external Pdfium library, binding to an external WASM module.
+     /// Returns a new [PdfiumLibraryBindings] object that contains bindings to the functions exposed
+     /// by the library, or an error if the library is not available.
+@@ -593,7 +594,7 @@ impl Default for Pdfium {
+         }
+     }
+ 
+-    #[cfg(target_arch = "wasm32")]
++    #[cfg(all(target_arch = "wasm32", not(feature = "static")))]
+     /// Binds to an external Pdfium library by attempting to a system-provided library.
+     ///
+     /// This function will panic if no suitable Pdfium library can be loaded.

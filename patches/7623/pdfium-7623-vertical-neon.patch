@@ -1,0 +1,85 @@
+--- a/core/fxge/dib/cstretchengine.cpp
++++ b/core/fxge/dib/cstretchengine.cpp
+@@ -14,6 +14,8 @@
+ 
+ #if defined(__wasm_simd128__)
+ #include <wasm_simd128.h>
++#elif defined(__aarch64__) && defined(__ARM_NEON)
++#include <arm_neon.h>
+ #endif
+ 
+ #include "core/fxcrt/check.h"
+@@ -32,7 +34,7 @@
+ 
+ namespace {
+ 
+-#if defined(__wasm_simd128__)
++#if defined(__wasm_simd128__) || (defined(__aarch64__) && defined(__ARM_NEON))
+ // Filter sixteen adjacent color bytes with the same vertical tap weights.
+ // Four-byte formats retain the destination's unused fourth byte.
+ bool StretchOpaqueScanlineSimd(pdfium::span<const uint8_t> intermediate,
+@@ -62,8 +64,13 @@
+ 
+   const size_t first_row = static_cast<size_t>(first);
+   const size_t taps = static_cast<size_t>(last - first) + 1;
++#if defined(__wasm_simd128__)
+   const v128_t keep_x = wasm_i8x16_make(0, 0, 0, -1, 0, 0, 0, -1,
+                                         0, 0, 0, -1, 0, 0, 0, -1);
++#else
++  const uint8x16_t keep_x = {0, 0, 0, 255, 0, 0, 0, 255,
++                              0, 0, 0, 255, 0, 0, 0, 255};
++#endif
+   const size_t vector_bytes = row_bytes & ~size_t{15};
+ 
+   // The checks above cover every full input row and the output row. The
+@@ -71,6 +78,7 @@
+   // the remaining bytes without reading pitch padding.
+   UNSAFE_TODO({
+     for (size_t offset = 0; offset < vector_bytes; offset += 16) {
++#if defined(__wasm_simd128__)
+       v128_t accum0 = wasm_i32x4_splat(0);
+       v128_t accum1 = accum0;
+       v128_t accum2 = accum0;
+@@ -99,6 +107,33 @@
+         packed = wasm_v128_bitselect(wasm_v128_load(dest.data() + offset), packed, keep_x);
+       }
+       wasm_v128_store(dest.data() + offset, packed);
++#else
++      uint32x4_t accum0 = vdupq_n_u32(0);
++      uint32x4_t accum1 = accum0;
++      uint32x4_t accum2 = accum0;
++      uint32x4_t accum3 = accum0;
++      for (size_t tap = 0; tap < taps; ++tap) {
++        const uint8x16_t input =
++            vld1q_u8(intermediate.data() + (first_row + tap) * stride + offset);
++        const uint16x8_t lo = vmovl_u8(vget_low_u8(input));
++        const uint16x8_t hi = vmovl_high_u8(input);
++        const uint32_t weight = weights.GetWeightForPosition(
++            weights.src_start_ + static_cast<int>(tap));
++        accum0 = vmlaq_n_u32(accum0, vmovl_u16(vget_low_u16(lo)), weight);
++        accum1 = vmlaq_n_u32(accum1, vmovl_high_u16(lo), weight);
++        accum2 = vmlaq_n_u32(accum2, vmovl_u16(vget_low_u16(hi)), weight);
++        accum3 = vmlaq_n_u32(accum3, vmovl_high_u16(hi), weight);
++      }
++      const uint16x8_t low_words =
++          vshrn_high_n_u32(vshrn_n_u32(accum0, 16), accum1, 16);
++      const uint16x8_t high_words =
++          vshrn_high_n_u32(vshrn_n_u32(accum2, 16), accum3, 16);
++      uint8x16_t packed = vmovn_high_u16(vmovn_u16(low_words), high_words);
++      if (bpp == 4) {
++        packed = vbslq_u8(keep_x, vld1q_u8(dest.data() + offset), packed);
++      }
++      vst1q_u8(dest.data() + offset, packed);
++#endif
+     }
+     for (size_t offset = vector_bytes; offset < row_bytes; ++offset) {
+       if (bpp == 4 && offset % 4 == 3) {
+@@ -575,7 +610,7 @@
+       }
+       case TransformMethod::k8BppToManyBpp:
+       case TransformMethod::kManyBpptoManyBpp: {
+-#if defined(__wasm_simd128__)
++#if defined(__wasm_simd128__) || (defined(__aarch64__) && defined(__ARM_NEON))
+         if (StretchOpaqueScanlineSimd(inter_buf_, dest_scanline_,
+                                      dest_clip_.Width(), DestBpp, inter_pitch_,
+                                      src_clip_.top, *pWeights)) {

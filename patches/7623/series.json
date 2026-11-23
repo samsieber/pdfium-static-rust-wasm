@@ -1,0 +1,106 @@
+{
+  "revisions": {
+    ".": "7ab0fb11656f7edb28f5fdfe01f9e831bfae03a2",
+    "build": "2fd7c745ebf1946563ad0e944b2c06866ce23fc0",
+    "third_party/abseil-cpp": "3684ae205ad54de145a5c397e41c266ca958632c",
+    "third_party/freetype/src": "30e45abe939d7c2cbdf268f277c293400096868c",
+    "third_party/icu": "a86a32e67b8d1384b33f8fa48c83a6079b86f8cd",
+    "third_party/libjpeg_turbo": "6383cf609c1f63c18af0f59b2738caa0c6c7e379",
+    "third_party/zlib": "e00f7038713ff2e751c28a1ac08f0b68bca8567c"
+  },
+  "build": [
+    {
+      "file": "build-pdfium.patch",
+      "directory": ".",
+      "strip": 1
+    },
+    {
+      "file": "build-chromium-build.patch",
+      "directory": "build",
+      "strip": 1
+    },
+    {
+      "file": "build-abseil.patch",
+      "directory": "third_party/abseil-cpp",
+      "strip": 1
+    },
+    {
+      "file": "build-freetype.patch",
+      "directory": "third_party/freetype/src",
+      "strip": 1
+    },
+    {
+      "file": "build-icu.patch",
+      "directory": "third_party/icu",
+      "strip": 1
+    },
+    {
+      "file": "build-libjpeg-turbo.patch",
+      "directory": "third_party/libjpeg_turbo",
+      "strip": 1
+    },
+    {
+      "file": "build-zlib.patch",
+      "directory": "third_party/zlib",
+      "strip": 1
+    }
+  ],
+  "performance": [
+    {
+      "file": "pdfium-7623-native-exports.patch",
+      "directory": ".",
+      "strip": 1
+    },
+    {
+      "file": "pdfium-7623-vertical-simd.patch",
+      "directory": ".",
+      "strip": 1
+    },
+    {
+      "file": "pdfium-7623-vertical-neon.patch",
+      "directory": ".",
+      "strip": 1
+    },
+    {
+      "file": "pdfium-7623-horizontal-simd.patch",
+      "directory": ".",
+      "strip": 1
+    },
+    {
+      "file": "pdfium-7623-horizontal-hoist.patch",
+      "directory": ".",
+      "strip": 1
+    },
+    {
+      "file": "pdfium-7623-horizontal-tap-plan.patch",
+      "directory": ".",
+      "strip": 1
+    },
+    {
+      "file": "pdfium-7623-vertical-short.patch",
+      "directory": ".",
+      "strip": 1
+    },
+    {
+      "file": "pdfium-7623-font-blend.patch",
+      "directory": ".",
+      "strip": 1
+    },
+    {
+      "file": "pdfium-7623-font-fir.patch",
+      "directory": "third_party/freetype/src",
+      "strip": 4
+    },
+    {
+      "file": "pdfium-7623-bgr-compose.patch",
+      "directory": ".",
+      "strip": 1
+    },
+    {
+      "file": "pdfium-7623-jpeg-idct.patch",
+      "directory": "third_party/libjpeg_turbo",
+      "strip": 3
+    }
+  ],
+  "wasiSdk": "32.0"
+}

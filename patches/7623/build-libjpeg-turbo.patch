@@ -1,0 +1,70 @@
+diff --git a/BUILD.gn b/BUILD.gn
+index f62c1d8..81504fd 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -352,6 +352,16 @@ static_library("libjpeg") {
+     "NO_PUTENV",
+   ]
+ 
++  if (current_os == "wasm32") {
++    defines += [
++      "fread=pdfium_wasm_libjpeg_fread",
++      "fwrite=pdfium_wasm_libjpeg_fwrite",
++      "fflush=pdfium_wasm_libjpeg_fflush",
++      "fprintf=pdfium_wasm_libjpeg_fprintf",
++    ]
++    sources += [ "src/jpeg_wasm_stubs.c" ]
++  }
++
+   configs += [
+     ":libjpeg_config",
+     ":libjpeg_simd_config",
+diff --git a/src/jpeg_wasm_stubs.c b/src/jpeg_wasm_stubs.c
+new file mode 100644
+index 0000000..ae6aea4
+--- /dev/null
++++ b/src/jpeg_wasm_stubs.c
+@@ -0,0 +1,43 @@
++#include <stdarg.h>
++#include <stddef.h>
++#include <stdio.h>
++
++#undef fread
++#undef fwrite
++#undef fflush
++#undef fprintf
++
++size_t pdfium_wasm_libjpeg_fread(void* buffer,
++                                 size_t size,
++                                 size_t count,
++                                 FILE* stream) {
++  (void)buffer;
++  (void)size;
++  (void)count;
++  (void)stream;
++  return 0;
++}
++
++size_t pdfium_wasm_libjpeg_fwrite(const void* buffer,
++                                  size_t size,
++                                  size_t count,
++                                  FILE* stream) {
++  (void)buffer;
++  (void)size;
++  (void)count;
++  (void)stream;
++  return 0;
++}
++
++int pdfium_wasm_libjpeg_fflush(FILE* stream) {
++  (void)stream;
++  return 0;
++}
++
++int pdfium_wasm_libjpeg_fprintf(FILE* stream, const char* format, ...) {
++  va_list args;
++  (void)stream;
++  va_start(args, format);
++  va_end(args);
++  return 0;
++}
